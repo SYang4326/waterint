@@ -1,0 +1,26 @@
+input:
+  trajectory: input/input.xyz
+  format: xyz
+
+system:
+  cell: [10.0, 10.0, 10.0]
+  pbc: [true, true, true]
+
+selection:
+  species: ["O"]
+  label: water_O
+
+coordinate:
+  mode: absolute
+  axis: z
+  range: [0.0, 10.0]
+  bins: 20
+
+normalization:
+  type: number_density
+
+output:
+  directory: output
+  prefix: density_water_O
+  plot: true
+  title: "Example water oxygen density"

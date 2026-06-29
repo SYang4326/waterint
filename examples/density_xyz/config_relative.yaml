@@ -1,0 +1,29 @@
+input:
+  trajectory: input/input.xyz
+  format: xyz
+
+system:
+  cell: [10.0, 10.0, 10.0]
+  pbc: [true, true, true]
+
+selection:
+  species: ["O"]
+  label: water_O_relative_to_Mg
+
+coordinate:
+  mode: relative_to_reference
+  axis: z
+  reference:
+    type: element_mean
+    species: ["Mg"]
+  range: [0.0, 10.0]
+  bins: 20
+
+normalization:
+  type: number_density
+
+output:
+  directory: output
+  prefix: density_water_O_relative
+  plot: true
+  title: "Water oxygen density relative to Mg reference"

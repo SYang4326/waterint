@@ -1,21 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
 import numpy as np
 
-
-@dataclass(frozen=True)
-class XYZFrame:
-    index: int
-    comment: str
-    symbols: list[str]
-    positions: np.ndarray
+from waterint.io.common import TrajectoryFrame
 
 
-def read_xyz(path: str | Path) -> Iterator[XYZFrame]:
+def read_xyz(path: str | Path) -> Iterator[TrajectoryFrame]:
     xyz_path = Path(path)
     with xyz_path.open("r", encoding="utf-8") as handle:
         frame_index = 0
@@ -49,7 +42,7 @@ def read_xyz(path: str | Path) -> Iterator[XYZFrame]:
                 except ValueError as exc:
                     raise ValueError(f"Bad XYZ coordinate row in {xyz_path}: {row!r}") from exc
 
-            yield XYZFrame(
+            yield TrajectoryFrame(
                 index=frame_index,
                 comment=comment.rstrip("\n"),
                 symbols=symbols,

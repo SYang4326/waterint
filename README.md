@@ -9,9 +9,12 @@ The first implemented workflow is a config-driven density profile from XYZ traje
 Implemented:
 
 - XYZ trajectory reader
-- 1D density profile along `x`, `y`, or `z`
+- LAMMPS dump (`lammpstrj`) trajectory reader with automatic orthorhombic cell extraction
+- 1D density profile along `x`, `y`, `z`, `-x`, `-y`, or `-z`
 - element-based selection
-- absolute coordinates or coordinates relative to a reference element mean
+- configurable coordinate range and bin count
+- absolute coordinates, coordinates relative to an element mean, or coordinates relative to a slab surface
+- oxygen-species density profiles based on local O-H coordination: `O2-`, `OH-`, `H2O`, `H3O+`
 - CSV, PNG, and metadata JSON outputs
 - command-line entry point: `waterint density --config config.yaml`
 
@@ -52,6 +55,22 @@ examples/density_xyz/output/density_water_O.csv
 examples/density_xyz/output/density_water_O.png
 examples/density_xyz/output/density_water_O_metadata.json
 ```
+
+Run an oxygen-species density example relative to a slab reference:
+
+```bash
+python -m waterint.cli density --config examples/density_xyz/config_oxygen_species.yaml
+```
+
+The species classifier currently uses a simple O-H distance cutoff. This is useful as a first robust protocol, but it is not yet a full proton-sharing or bond-history model.
+
+Run a LAMMPS dump example with explicit atom-type mapping:
+
+```bash
+python -m waterint.cli density --config examples/density_lammpstrj/config_oxygen_species.yaml
+```
+
+For `lammpstrj` inputs, set `input.type_map` when atom types are numeric. `system.cell: auto` reads the cell lengths from `ITEM: BOX BOUNDS`.
 
 ## Repository Placement
 

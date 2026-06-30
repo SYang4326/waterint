@@ -8,7 +8,7 @@ import numpy as np
 def plot_density_profile(
     path: str | Path,
     x: np.ndarray,
-    y: np.ndarray,
+    y: np.ndarray | dict[str, dict[str, np.ndarray]],
     xlabel: str,
     ylabel: str,
     title: str,
@@ -19,7 +19,12 @@ def plot_density_profile(
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(6.0, 4.0), constrained_layout=True)
-    ax.plot(x, y, color="#2563eb", lw=1.8)
+    if isinstance(y, dict):
+        for label, profile in y.items():
+            ax.plot(x, profile["density"], lw=1.8, label=label)
+        ax.legend(frameon=False)
+    else:
+        ax.plot(x, y, color="#2563eb", lw=1.8)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_title(title)

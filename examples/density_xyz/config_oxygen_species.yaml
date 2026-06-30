@@ -1,0 +1,33 @@
+input:
+  trajectory: input/input.xyz
+  format: xyz
+
+system:
+  cell: [10.0, 10.0, 10.0]
+  pbc: [true, true, true]
+
+selection:
+  mode: oxygen_species
+  oxygen_species: ["O2-", "OH-", "H2O", "H3O+"]
+  oxygen_symbol: O
+  hydrogen_symbol: H
+  oh_cutoff: 1.25
+
+coordinate:
+  mode: relative_to_slab
+  axis: z
+  reference:
+    type: slab_surface
+    species: ["Mg"]
+    surface: max
+  range: [0.0, 10.0]
+  bins: 20
+
+normalization:
+  type: number_density
+
+output:
+  directory: output
+  prefix: density_oxygen_species_relative_to_slab
+  plot: true
+  title: "O species density relative to slab"

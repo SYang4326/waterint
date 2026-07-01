@@ -12,6 +12,8 @@ selection:
   oxygen_symbol: O
   hydrogen_symbol: H
   oh_cutoff: 1.25
+  neighbor_method: auto
+  neighbor_workers: 1
 
 coordinate:
   mode: relative_to_slab

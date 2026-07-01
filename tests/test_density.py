@@ -4,6 +4,7 @@ import unittest
 
 from waterint.config import load_config
 from waterint.density import run_density
+from waterint.io.npz import write_npz_from_lammpstrj
 
 
 class DensityTests(unittest.TestCase):
@@ -33,6 +34,18 @@ class DensityTests(unittest.TestCase):
         text = result.csv_path.read_text()
         self.assertIn("H2O_density", text)
         self.assertIn("OH-_density", text)
+
+    def test_oxygen_species_matrix_neighbor_method(self):
+        root = Path(__file__).resolve().parents[1]
+        config = load_config(root / "examples/density_xyz/config_oxygen_species.yaml")
+        config["selection"]["neighbor_method"] = "matrix"
+        config["selection"]["oxygen_chunk_size"] = 1
+        config["output"]["prefix"] = "density_oxygen_species_matrix"
+
+        result = run_density(config)
+
+        self.assertEqual(result.selected_atoms_total["H2O"], 4)
+        self.assertEqual(result.selected_atoms_total["O2-"], 0)
 
     def test_signed_axis_is_supported(self):
         root = Path(__file__).resolve().parents[1]
@@ -69,6 +82,25 @@ class DensityTests(unittest.TestCase):
         self.assertEqual(result.frames, 1)
         self.assertEqual(result.selected_atoms_total["H2O"], 1)
         self.assertEqual(result.selected_atoms_total["O2-"], 1)
+
+    def test_npz_cache_matches_lammpstrj_density(self):
+        root = Path(__file__).resolve().parents[1]
+        config = load_config(root / "examples/density_lammpstrj/config_oxygen_species.yaml")
+        cache_path = root / "examples/density_lammpstrj/output/small_cache.npz"
+        write_npz_from_lammpstrj(
+            trajectory_path=root / "examples/density_lammpstrj" / config["input"]["trajectory"],
+            output_path=cache_path,
+            type_map=config["input"]["type_map"],
+        )
+        config["input"]["trajectory"] = str(cache_path)
+        config["input"]["format"] = "npz"
+        config["output"]["prefix"] = "density_npz_oxygen_species"
+
+        result = run_density(config)
+
+        self.assertEqual(result.frames, 2)
+        self.assertEqual(result.selected_atoms_total["H2O"], 2)
+        self.assertEqual(result.selected_atoms_total["O2-"], 2)
 
     def test_mass_density_g_cm3_for_h2o(self):
         root = Path(__file__).resolve().parents[1]

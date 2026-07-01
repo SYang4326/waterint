@@ -2,7 +2,7 @@
 
 WaterInt is a Python-first toolkit for reproducible analysis of water-containing molecular simulations.
 
-The first implemented workflow is a config-driven density profile from XYZ trajectories. The intended scope is broader than a single MgO/water project: bulk water, water/material interfaces, nanoconfined water, and selected ions or molecular species should all use the same analysis engine with different configuration files.
+The first implemented workflow is a config-driven density profile from XYZ or LAMMPS dump trajectories. The intended scope is broader than a single MgO/water project: bulk water, water/material interfaces, nanoconfined water, and selected ions or molecular species should all use the same analysis engine with different configuration files.
 
 ## Current Status
 
@@ -10,11 +10,13 @@ Implemented:
 
 - XYZ trajectory reader
 - LAMMPS dump (`lammpstrj`) trajectory reader with automatic orthorhombic cell extraction
+- WaterInt NPZ trajectory cache for faster repeated analysis of large LAMMPS dump files
 - 1D density profile along `x`, `y`, `z`, `-x`, `-y`, or `-z`
 - element-based selection
 - configurable coordinate range and bin count
 - absolute coordinates, coordinates relative to an element mean, or coordinates relative to a slab surface
 - oxygen-species density profiles based on local O-H coordination: `O2-`, `OH-`, `H2O`, `H3O+`
+- fast O-H neighbor counting with scipy `cKDTree` when available
 - CSV, PNG, and metadata JSON outputs
 - command-line entry point: `waterint density --config config.yaml`
 
@@ -63,6 +65,7 @@ python -m waterint.cli density --config examples/density_xyz/config_oxygen_speci
 ```
 
 The species classifier currently uses a simple O-H distance cutoff. This is useful as a first robust protocol, but it is not yet a full proton-sharing or bond-history model.
+For large trajectories, oxygen-species classification uses `selection.neighbor_method: auto` by default. This uses scipy `cKDTree` when scipy is installed, and falls back to a chunked NumPy distance search otherwise. You can set `selection.neighbor_workers: -1` to let scipy use all available CPU threads for the neighbor search.
 
 Run a LAMMPS dump example with explicit atom-type mapping:
 
@@ -71,6 +74,29 @@ python -m waterint.cli density --config examples/density_lammpstrj/config_oxygen
 ```
 
 For `lammpstrj` inputs, set `input.type_map` when atom types are numeric. `system.cell: auto` reads the cell lengths from `ITEM: BOX BOUNDS`.
+
+For repeated analysis of the same large LAMMPS dump, first convert it to a WaterInt NPZ cache:
+
+```bash
+waterint convert-lammpstrj \
+  --input dump.lammpstrj \
+  --output dump.waterint.npz \
+  --type-map 1=H 2=Mg 3=O
+```
+
+Then use the cache in a density config:
+
+```yaml
+input:
+  trajectory: dump.waterint.npz
+  format: npz
+  type_map:
+    1: H
+    2: Mg
+    3: O
+```
+
+The conversion is an upfront cost, but it avoids repeatedly parsing the same text trajectory for density, orientation, and future analysis modules.
 
 ## Repository Placement
 

@@ -12,6 +12,9 @@ def read_lammpstrj(
     path: str | Path,
     *,
     type_map: dict[Any, str] | None = None,
+    start_timestep: int | None = None,
+    stride: int = 1,
+    max_frames: int | None = None,
 ) -> Iterator[TrajectoryFrame]:
     """Stream orthorhombic LAMMPS dump frames.
 
@@ -20,9 +23,14 @@ def read_lammpstrj(
     """
     dump_path = Path(path)
     symbol_by_type = _normalize_type_map(type_map or {})
+    if stride <= 0:
+        raise ValueError("stride must be > 0.")
+    if max_frames is not None and max_frames <= 0:
+        raise ValueError("max_frames must be positive or None.")
 
     with dump_path.open("r", encoding="utf-8", errors="replace") as handle:
         frame_index = 0
+        yielded = 0
         while True:
             line = handle.readline()
             if not line:
@@ -53,13 +61,24 @@ def read_lammpstrj(
             if missing:
                 raise ValueError(f"LAMMPS dump missing required atom columns: {missing}")
 
+            should_yield = (
+                (start_timestep is None or timestep >= start_timestep)
+                and frame_index % stride == 0
+            )
+            if not should_yield:
+                _skip_lines(handle, natoms)
+                frame_index += 1
+                continue
+
             symbols: list[str] = []
+            types = np.empty(natoms, dtype=int)
             positions = np.empty((natoms, 3), dtype=float)
             for atom_i in range(natoms):
                 fields = handle.readline().split()
                 if len(fields) < len(columns):
                     raise ValueError(f"Bad atom row in frame {frame_index}: {fields!r}")
                 type_id = int(float(fields[col_index["type"]]))
+                types[atom_i] = type_id
                 symbols.append(symbol_by_type.get(type_id, str(type_id)))
                 positions[atom_i] = [
                     float(fields[col_index["x"]]),
@@ -74,7 +93,11 @@ def read_lammpstrj(
                 positions=positions,
                 cell=cell,
                 step=timestep,
+                types=types,
             )
+            yielded += 1
+            if max_frames is not None and yielded >= max_frames:
+                return
             frame_index += 1
 
 
@@ -90,3 +113,9 @@ def _normalize_type_map(raw: dict[Any, str]) -> dict[int, str]:
     for key, value in raw.items():
         out[int(key)] = str(value)
     return out
+
+
+def _skip_lines(handle, count: int) -> None:
+    for _ in range(count):
+        if not handle.readline():
+            raise ValueError("Unexpected end of file while skipping LAMMPS atom rows.")

@@ -11,9 +11,11 @@ import numpy as np
 
 from waterint.chemistry import classify_oxygen_by_h_count
 from waterint.config import require_mapping
+from waterint.io.common import TrajectoryFrame
 from waterint.io.lammpstrj import read_lammpstrj
+from waterint.io.npz import read_npz
 from waterint.io.xyz import read_xyz
-from waterint.plotting import plot_density_profile
+from waterint.density.plotting import plot_density_profile
 
 
 AXIS_INDEX = {"x": 0, "y": 1, "z": 2}
@@ -47,8 +49,8 @@ def run_density(config: dict[str, Any]) -> DensityResult:
     output_cfg = require_mapping(config, "output")
 
     fmt = str(input_cfg.get("format", "xyz")).lower()
-    if fmt not in {"xyz", "lammpstrj"}:
-        raise ValueError("input.format must be xyz or lammpstrj.")
+    if fmt not in {"xyz", "lammpstrj", "npz"}:
+        raise ValueError("input.format must be xyz, lammpstrj, or npz.")
 
     traj_path = _resolve_path(config, input_cfg["trajectory"])
     configured_cell = _parse_cell(system_cfg.get("cell", "auto"))
@@ -60,6 +62,7 @@ def run_density(config: dict[str, Any]) -> DensityResult:
         raise ValueError("coordinate.bins must be > 0.")
 
     profile_labels = _profile_labels(selection_cfg)
+    selection_context = _selection_context(input_cfg)
 
     mode = str(coord_cfg.get("mode", "absolute"))
     reference_cfg = coord_cfg.get("reference", {})
@@ -88,11 +91,11 @@ def run_density(config: dict[str, Any]) -> DensityResult:
 
         reference = 0.0
         if mode == "relative_to_reference":
-            reference = _reference_value(frame.symbols, frame.positions, axis, reference_cfg)
+            reference = _reference_value(frame, axis, reference_cfg, selection_context)
         elif mode == "relative_to_slab":
-            reference = _slab_reference_value(frame.symbols, frame.positions, axis, reference_cfg, axis_sign)
+            reference = _slab_reference_value(frame, axis, reference_cfg, axis_sign, selection_context)
 
-        selected_indices_by_label = _selected_indices_by_label(frame.symbols, frame.positions, selection_cfg)
+        selected_indices_by_label = _selected_indices_by_label(frame, selection_cfg, selection_context)
         for label, selected_indices in selected_indices_by_label.items():
             selected_atoms_total[label] += int(selected_indices.size)
             values = axis_sign * (frame.positions[selected_indices, axis] - reference)
@@ -171,13 +174,6 @@ def _parse_axis(value: Any) -> tuple[str, int, float]:
 
 def _iter_frames(traj_path: Path, input_cfg: dict[str, Any]):
     fmt = str(input_cfg.get("format", "xyz")).lower()
-    if fmt == "xyz":
-        frames = read_xyz(traj_path)
-    elif fmt == "lammpstrj":
-        frames = read_lammpstrj(traj_path, type_map=input_cfg.get("type_map", {}))
-    else:
-        raise ValueError("input.format must be xyz or lammpstrj.")
-
     stride = int(input_cfg.get("stride", 1))
     max_frames_raw = input_cfg.get("max_frames", None)
     max_frames = None if max_frames_raw in {None, 0, "all"} else int(max_frames_raw)
@@ -187,6 +183,22 @@ def _iter_frames(traj_path: Path, input_cfg: dict[str, Any]):
         raise ValueError("input.stride must be > 0.")
     if max_frames is not None and max_frames <= 0:
         raise ValueError("input.max_frames must be positive, 0, 'all', or omitted.")
+
+    if fmt == "xyz":
+        frames = read_xyz(traj_path)
+    elif fmt == "lammpstrj":
+        yield from read_lammpstrj(
+            traj_path,
+            type_map=input_cfg.get("type_map", {}),
+            start_timestep=start_timestep,
+            stride=stride,
+            max_frames=max_frames,
+        )
+        return
+    elif fmt == "npz":
+        frames = read_npz(traj_path, type_map=input_cfg.get("type_map", {}))
+    else:
+        raise ValueError("input.format must be xyz, lammpstrj, or npz.")
 
     yielded = 0
     for frame in frames:
@@ -226,26 +238,48 @@ def _profile_labels(selection_cfg: dict[str, Any]) -> list[str]:
     raise ValueError("selection.mode must be element or oxygen_species.")
 
 
+def _selection_context(input_cfg: dict[str, Any]) -> dict[str, Any]:
+    raw_type_map = input_cfg.get("type_map", {})
+    symbol_to_types: dict[str, list[int]] = {}
+    if isinstance(raw_type_map, dict):
+        for raw_type, raw_symbol in raw_type_map.items():
+            symbol_to_types.setdefault(str(raw_symbol), []).append(int(raw_type))
+    return {"symbol_to_types": symbol_to_types}
+
+
 def _selected_indices_by_label(
-    symbols: list[str],
-    positions: np.ndarray,
+    frame: TrajectoryFrame,
     selection_cfg: dict[str, Any],
+    selection_context: dict[str, Any],
 ) -> dict[str, np.ndarray]:
     mode = str(selection_cfg.get("mode", "element"))
     if mode == "element":
         species = selection_cfg.get("species")
         species_set = {str(item) for item in species}
         label = str(selection_cfg.get("label", "_".join(sorted(species_set))))
-        mask = np.isin(np.asarray(symbols), list(species_set))
+        mask = _element_mask(frame, species_set, selection_context)
         return {label: np.where(mask)[0]}
 
     if mode == "oxygen_species":
         classified = classify_oxygen_by_h_count(
-            symbols,
-            positions,
+            frame.symbols,
+            frame.positions,
             oxygen_symbol=str(selection_cfg.get("oxygen_symbol", "O")),
             hydrogen_symbol=str(selection_cfg.get("hydrogen_symbol", "H")),
             oh_cutoff=float(selection_cfg.get("oh_cutoff", 1.25)),
+            neighbor_method=str(selection_cfg.get("neighbor_method", "auto")),
+            neighbor_workers=int(selection_cfg.get("neighbor_workers", 1)),
+            oxygen_chunk_size=int(selection_cfg.get("oxygen_chunk_size", 2048)),
+            oxygen_indices=_element_indices(
+                frame,
+                {str(selection_cfg.get("oxygen_symbol", "O"))},
+                selection_context,
+            ),
+            hydrogen_indices=_element_indices(
+                frame,
+                {str(selection_cfg.get("hydrogen_symbol", "H"))},
+                selection_context,
+            ),
         )
         return {
             label: classified[label]
@@ -253,6 +287,29 @@ def _selected_indices_by_label(
         }
 
     raise ValueError("selection.mode must be element or oxygen_species.")
+
+
+def _element_indices(
+    frame: TrajectoryFrame,
+    species_set: set[str],
+    selection_context: dict[str, Any],
+) -> np.ndarray:
+    return np.where(_element_mask(frame, species_set, selection_context))[0]
+
+
+def _element_mask(
+    frame: TrajectoryFrame,
+    species_set: set[str],
+    selection_context: dict[str, Any],
+) -> np.ndarray:
+    symbol_to_types = selection_context.get("symbol_to_types", {})
+    if frame.types is not None and symbol_to_types:
+        type_ids: list[int] = []
+        for species in species_set:
+            type_ids.extend(symbol_to_types.get(species, []))
+        if type_ids:
+            return np.isin(frame.types, type_ids)
+    return np.isin(np.asarray(frame.symbols), list(species_set))
 
 
 def _resolve_path(config: dict[str, Any], path_value: str | Path) -> Path:
@@ -283,10 +340,10 @@ def _parse_range(value: Any) -> tuple[float, float]:
 
 
 def _reference_value(
-    symbols: list[str],
-    positions: np.ndarray,
+    frame: TrajectoryFrame,
     axis: int,
     reference_cfg: dict[str, Any],
+    selection_context: dict[str, Any],
 ) -> float:
     ref_type = str(reference_cfg.get("type", "element_mean"))
     if ref_type != "element_mean":
@@ -295,18 +352,18 @@ def _reference_value(
     ref_species = reference_cfg.get("species")
     if not ref_species or not isinstance(ref_species, list):
         raise ValueError("reference.species must be a non-empty list.")
-    mask = np.isin(np.asarray(symbols), [str(item) for item in ref_species])
+    mask = _element_mask(frame, {str(item) for item in ref_species}, selection_context)
     if not np.any(mask):
         raise ValueError(f"Reference selection found no atoms: {ref_species}")
-    return float(np.mean(positions[mask, axis]))
+    return float(np.mean(frame.positions[mask, axis]))
 
 
 def _slab_reference_value(
-    symbols: list[str],
-    positions: np.ndarray,
+    frame: TrajectoryFrame,
     axis: int,
     reference_cfg: dict[str, Any],
     axis_sign: float,
+    selection_context: dict[str, Any],
 ) -> float:
     ref_type = str(reference_cfg.get("type", "slab_surface"))
     if ref_type not in {"slab_surface", "element_surface"}:
@@ -316,8 +373,8 @@ def _slab_reference_value(
     if not slab_species or not isinstance(slab_species, list):
         raise ValueError("reference.species must list slab atom symbols, e.g. ['Mg'].")
 
-    mask = np.isin(np.asarray(symbols), [str(item) for item in slab_species])
-    values = positions[mask, axis]
+    mask = _element_mask(frame, {str(item) for item in slab_species}, selection_context)
+    values = frame.positions[mask, axis]
     if values.size == 0:
         raise ValueError(f"Slab reference selection found no atoms: {slab_species}")
 

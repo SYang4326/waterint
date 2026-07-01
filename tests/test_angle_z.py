@@ -1,0 +1,30 @@
+from pathlib import Path
+import shutil
+import unittest
+
+from waterint.angle_z import run_angle_z
+from waterint.config import load_config
+
+
+class AngleZTests(unittest.TestCase):
+    def test_angle_z_example_writes_species_outputs(self):
+        root = Path(__file__).resolve().parents[1]
+        output = root / "examples/angle_z_lammpstrj/output"
+        if output.exists():
+            shutil.rmtree(output)
+
+        result = run_angle_z(load_config(root / "examples/angle_z_lammpstrj/config.yaml"))
+
+        self.assertEqual(result.frames, 2)
+        self.assertEqual(result.bond_counts_total["OH-"], 2)
+        self.assertEqual(result.bond_counts_total["H2O"], 8)
+        self.assertEqual(result.bond_counts_total["H3O+"], 6)
+        for label in ["OH-", "H2O", "H3O+"]:
+            self.assertTrue(result.csv_paths[label].exists())
+            self.assertTrue(result.png_paths[label].exists())
+            self.assertGreater(float(result.histograms[label].sum()), 0.0)
+        self.assertTrue(result.metadata_path.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

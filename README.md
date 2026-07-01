@@ -12,6 +12,7 @@ Implemented:
 - LAMMPS dump (`lammpstrj`) trajectory reader with automatic orthorhombic cell extraction
 - WaterInt NPZ trajectory cache for faster repeated analysis of large LAMMPS dump files
 - 1D density profile along `x`, `y`, `z`, `-x`, `-y`, or `-z`
+- O-H bond angle vs coordinate 2D histograms for `OH-`, `H2O`, and `H3O+`
 - element-based selection
 - configurable coordinate range and bin count
 - absolute coordinates, coordinates relative to an element mean, or coordinates relative to a slab surface
@@ -19,6 +20,7 @@ Implemented:
 - fast O-H neighbor counting with scipy `cKDTree` when available
 - CSV, PNG, and metadata JSON outputs
 - command-line entry point: `waterint density --config config.yaml`
+- command-line entry point: `waterint angle-z --config config.yaml`
 
 Planned:
 
@@ -74,6 +76,14 @@ python -m waterint.cli density --config examples/density_lammpstrj/config_oxygen
 ```
 
 For `lammpstrj` inputs, set `input.type_map` when atom types are numeric. `system.cell: auto` reads the cell lengths from `ITEM: BOX BOUNDS`.
+
+Run an O-H bond angle vs z example:
+
+```bash
+python -m waterint.cli angle-z --config examples/angle_z_lammpstrj/config.yaml
+```
+
+This writes one 2D histogram per requested oxygen species. The current angle convention is the O-to-H bond vector angle to the configured coordinate axis, in degrees. The coordinate position is the oxygen position, using the same absolute/reference/slab-relative coordinate modes as the density workflow.
 
 For repeated analysis of the same large LAMMPS dump, first convert it to a WaterInt NPZ cache:
 

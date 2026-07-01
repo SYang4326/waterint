@@ -1,0 +1,42 @@
+input:
+  trajectory: input/small_angle.lammpstrj
+  format: lammpstrj
+  type_map:
+    1: H
+    2: O
+    3: Mg
+
+system:
+  cell: auto
+
+selection:
+  oxygen_species: ["OH-", "H2O", "H3O+"]
+  oxygen_symbol: O
+  hydrogen_symbol: H
+  oh_cutoff: 1.25
+  neighbor_method: auto
+  neighbor_workers: 1
+
+coordinate:
+  mode: relative_to_slab
+  axis: z
+  reference:
+    type: slab_surface
+    species: ["Mg"]
+    surface: max
+  range: [0.0, 5.0]
+  bins: 10
+
+angle:
+  range: [0.0, 180.0]
+  bins: 18
+  axis_sign: 1
+
+normalization:
+  type: counts_per_frame
+
+output:
+  directory: output
+  prefix: angle_z_oxygen_species
+  plot: true
+  log: false

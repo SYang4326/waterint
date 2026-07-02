@@ -10,7 +10,7 @@ import math
 import numpy as np
 
 from waterint.angle_z.plotting import plot_angle_z_histogram
-from waterint.chemistry import oxygen_hydrogen_pairs_by_species
+from waterint.chemistry import oxygen_hydrogen_neighbors_by_species, oxygen_hydrogen_pairs_by_species
 from waterint.common import (
     element_indices,
     iter_frames,
@@ -35,6 +35,7 @@ class AngleZResult:
     histograms: dict[str, np.ndarray]
     frames: int
     bond_counts_total: dict[str, int]
+    sample_counts_total: dict[str, int]
     csv_paths: dict[str, Path]
     png_paths: dict[str, Path]
     metadata_path: Path
@@ -60,6 +61,9 @@ def run_angle_z(config: dict[str, Any]) -> AngleZResult:
     angle_bins = int(angle_cfg.get("bins", 180))
     if angle_bins <= 0:
         raise ValueError("angle.bins must be > 0.")
+    vector_mode = str(angle_cfg.get("vector_mode", "oh_bond")).lower()
+    if vector_mode not in {"oh_bond", "oh_bisector", "dipole"}:
+        raise ValueError("angle.vector_mode must be oh_bond, oh_bisector, or dipole.")
 
     species_labels = _species_labels(selection_cfg)
     z_edges = np.linspace(z_min, z_max, z_bins + 1)
@@ -68,6 +72,7 @@ def run_angle_z(config: dict[str, Any]) -> AngleZResult:
     angle_centers = 0.5 * (angle_edges[:-1] + angle_edges[1:])
     counts_by_species = {label: np.zeros((z_bins, angle_bins), dtype=float) for label in species_labels}
     bond_counts_total = {label: 0 for label in species_labels}
+    sample_counts_total = {label: 0 for label in species_labels}
 
     mode = str(coord_cfg.get("mode", "absolute"))
     reference_cfg = coord_cfg.get("reference", {})
@@ -91,33 +96,68 @@ def run_angle_z(config: dict[str, Any]) -> AngleZResult:
         elif mode == "relative_to_slab":
             reference = slab_reference_value(frame, axis, reference_cfg, axis_sign, context)
 
-        pairs_by_species = oxygen_hydrogen_pairs_by_species(
-            frame.symbols,
-            frame.positions,
-            oxygen_symbol=str(selection_cfg.get("oxygen_symbol", "O")),
-            hydrogen_symbol=str(selection_cfg.get("hydrogen_symbol", "H")),
-            oh_cutoff=float(selection_cfg.get("oh_cutoff", 1.25)),
-            neighbor_method=str(selection_cfg.get("neighbor_method", "auto")),
-            neighbor_workers=int(selection_cfg.get("neighbor_workers", 1)),
-            oxygen_chunk_size=int(selection_cfg.get("oxygen_chunk_size", 2048)),
-            oxygen_indices=element_indices(frame, {str(selection_cfg.get("oxygen_symbol", "O"))}, context),
-            hydrogen_indices=element_indices(frame, {str(selection_cfg.get("hydrogen_symbol", "H"))}, context),
-        )
-        for label in species_labels:
-            pairs = pairs_by_species[label]
-            if pairs.size == 0:
-                continue
-            z_values, angle_values = _pair_z_and_angles(
-                positions=frame.positions,
-                pairs=pairs,
-                axis=axis,
-                axis_sign=axis_sign,
-                reference=reference,
-                angle_axis_sign=float(angle_cfg.get("axis_sign", 1.0)),
+        oxygen_indices = element_indices(frame, {str(selection_cfg.get("oxygen_symbol", "O"))}, context)
+        hydrogen_indices = element_indices(frame, {str(selection_cfg.get("hydrogen_symbol", "H"))}, context)
+        if vector_mode == "oh_bond":
+            pairs_by_species = oxygen_hydrogen_pairs_by_species(
+                frame.symbols,
+                frame.positions,
+                oxygen_symbol=str(selection_cfg.get("oxygen_symbol", "O")),
+                hydrogen_symbol=str(selection_cfg.get("hydrogen_symbol", "H")),
+                oh_cutoff=float(selection_cfg.get("oh_cutoff", 1.25)),
+                neighbor_method=str(selection_cfg.get("neighbor_method", "auto")),
+                neighbor_workers=int(selection_cfg.get("neighbor_workers", 1)),
+                oxygen_chunk_size=int(selection_cfg.get("oxygen_chunk_size", 2048)),
+                oxygen_indices=oxygen_indices,
+                hydrogen_indices=hydrogen_indices,
             )
-            hist, _, _ = np.histogram2d(z_values, angle_values, bins=[z_edges, angle_edges])
-            counts_by_species[label] += hist
-            bond_counts_total[label] += int(pairs.shape[0])
+            for label in species_labels:
+                pairs = pairs_by_species[label]
+                if pairs.size == 0:
+                    continue
+                z_values, angle_values = _pair_z_and_angles(
+                    positions=frame.positions,
+                    pairs=pairs,
+                    axis=axis,
+                    axis_sign=axis_sign,
+                    reference=reference,
+                    angle_axis_sign=float(angle_cfg.get("axis_sign", 1.0)),
+                )
+                hist, _, _ = np.histogram2d(z_values, angle_values, bins=[z_edges, angle_edges])
+                counts_by_species[label] += hist
+                bond_counts_total[label] += int(pairs.shape[0])
+                sample_counts_total[label] += int(z_values.size)
+        else:
+            neighbors_by_species = oxygen_hydrogen_neighbors_by_species(
+                frame.symbols,
+                frame.positions,
+                oxygen_symbol=str(selection_cfg.get("oxygen_symbol", "O")),
+                hydrogen_symbol=str(selection_cfg.get("hydrogen_symbol", "H")),
+                oh_cutoff=float(selection_cfg.get("oh_cutoff", 1.25)),
+                neighbor_method=str(selection_cfg.get("neighbor_method", "auto")),
+                neighbor_workers=int(selection_cfg.get("neighbor_workers", 1)),
+                oxygen_chunk_size=int(selection_cfg.get("oxygen_chunk_size", 2048)),
+                oxygen_indices=oxygen_indices,
+                hydrogen_indices=hydrogen_indices,
+            )
+            for label in species_labels:
+                neighbors = neighbors_by_species[label]
+                if not neighbors:
+                    continue
+                z_values, angle_values, bond_count = _neighbor_bisector_z_and_angles(
+                    positions=frame.positions,
+                    neighbors=neighbors,
+                    axis=axis,
+                    axis_sign=axis_sign,
+                    reference=reference,
+                    angle_axis_sign=float(angle_cfg.get("axis_sign", 1.0)),
+                )
+                if z_values.size == 0:
+                    continue
+                hist, _, _ = np.histogram2d(z_values, angle_values, bins=[z_edges, angle_edges])
+                counts_by_species[label] += hist
+                bond_counts_total[label] += int(bond_count)
+                sample_counts_total[label] += int(z_values.size)
         frames += 1
 
     if frames == 0:
@@ -158,9 +198,10 @@ def run_angle_z(config: dict[str, Any]) -> AngleZResult:
                 z_centers=z_centers,
                 angle_centers=angle_centers,
                 hist=hist,
-                title=f"{label}: {output_cfg.get('title', f'O-H angle vs {axis_label}')}",
+                title=f"{label}: {output_cfg.get('title', f'{_vector_label(vector_mode)} angle vs {axis_label}')}",
                 z_label=str(output_cfg.get("z_label", f"{axis_label} coordinate (Angstrom)")),
-                value_label=_value_label(normalization_cfg),
+                value_label=_value_label(normalization_cfg, vector_mode=vector_mode),
+                angle_label=str(output_cfg.get("angle_label", _plot_angle_label(vector_mode))),
                 log=bool(output_cfg.get("log", False)),
                 cmap=str(output_cfg.get("cmap", "turbo")),
                 style=str(output_cfg.get("style", "contour")),
@@ -197,6 +238,7 @@ def run_angle_z(config: dict[str, Any]) -> AngleZResult:
         species_labels=species_labels,
         frames=frames,
         bond_counts_total=bond_counts_total,
+        sample_counts_total=sample_counts_total,
         csv_paths=csv_paths,
         png_paths=png_paths,
     )
@@ -207,6 +249,7 @@ def run_angle_z(config: dict[str, Any]) -> AngleZResult:
         histograms=histograms,
         frames=frames,
         bond_counts_total=bond_counts_total,
+        sample_counts_total=sample_counts_total,
         csv_paths=csv_paths,
         png_paths=png_paths,
         metadata_path=metadata_path,
@@ -250,6 +293,41 @@ def _pair_z_and_angles(
     return z_values, angles
 
 
+def _neighbor_bisector_z_and_angles(
+    *,
+    positions: np.ndarray,
+    neighbors: list[tuple[int, np.ndarray]],
+    axis: int,
+    axis_sign: float,
+    reference: float,
+    angle_axis_sign: float,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    z_values: list[float] = []
+    angle_values: list[float] = []
+    bond_count = 0
+    for oxygen_index, hydrogen_indices in neighbors:
+        if hydrogen_indices.size == 0:
+            continue
+        oxygen_position = positions[oxygen_index]
+        vectors = positions[hydrogen_indices] - oxygen_position
+        norms = np.linalg.norm(vectors, axis=1)
+        valid = norms > 0
+        if not np.any(valid):
+            continue
+        unit_vectors = vectors[valid] / norms[valid, None]
+        direction = np.sum(unit_vectors, axis=0)
+        direction_norm = float(np.linalg.norm(direction))
+        if direction_norm <= 0:
+            continue
+        direction = direction / direction_norm
+        cos_theta = angle_axis_sign * direction[axis]
+        cos_theta = float(np.clip(cos_theta, -1.0, 1.0))
+        angle_values.append(float(np.degrees(np.arccos(cos_theta))))
+        z_values.append(float(axis_sign * (oxygen_position[axis] - reference)))
+        bond_count += int(np.count_nonzero(valid))
+    return np.asarray(z_values, dtype=float), np.asarray(angle_values, dtype=float), bond_count
+
+
 def _normalize_histogram(
     *,
     counts: np.ndarray,
@@ -278,10 +356,27 @@ def _normalize_histogram(
     return counts_per_frame / volume_angle
 
 
-def _value_label(normalization_cfg: Any) -> str:
+def _value_label(normalization_cfg: Any, *, vector_mode: str = "oh_bond") -> str:
+    sample_name = "O-H bond" if vector_mode == "oh_bond" else "molecular vector"
     if isinstance(normalization_cfg, dict) and str(normalization_cfg.get("type", "counts_per_frame")) == "number_density":
-        return "bond density (1/A^3/degree)"
-    return "O-H bonds per frame"
+        return f"{sample_name} density (1/A^3/degree)"
+    return f"{sample_name}s per frame"
+
+
+def _vector_label(vector_mode: str) -> str:
+    if vector_mode == "oh_bond":
+        return "O-H"
+    if vector_mode == "dipole":
+        return "dipole"
+    return "O-H bisector"
+
+
+def _plot_angle_label(vector_mode: str) -> str:
+    if vector_mode == "oh_bond":
+        return r"OH angle to +z ($^\circ$)"
+    if vector_mode == "dipole":
+        return r"dipole angle to +z ($^\circ$)"
+    return r"O-H bisector angle to +z ($^\circ$)"
 
 
 def _optional_float(value: Any) -> float | None:
@@ -312,6 +407,7 @@ def _write_metadata(
     species_labels: list[str],
     frames: int,
     bond_counts_total: dict[str, int],
+    sample_counts_total: dict[str, int],
     csv_paths: dict[str, Path],
     png_paths: dict[str, Path],
 ) -> None:
@@ -325,6 +421,7 @@ def _write_metadata(
         "species_labels": species_labels,
         "frames": frames,
         "bond_counts_total": bond_counts_total,
+        "sample_counts_total": sample_counts_total,
         "outputs": {
             "csv": {label: str(path) for label, path in csv_paths.items()},
             "png": {label: str(path) for label, path in png_paths.items()},

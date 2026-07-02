@@ -14,6 +14,7 @@ def plot_angle_z_histogram(
     title: str,
     z_label: str,
     value_label: str,
+    angle_label: str = "OH angle to +z (degrees)",
     log: bool = False,
     cmap: str = "turbo",
     style: str = "contour",
@@ -56,6 +57,7 @@ def plot_angle_z_histogram(
             angle_centers=angle_centers,
             hist=hist,
             z_label=z_label,
+            angle_label=angle_label,
             log=log,
             style=style,
             cmap_name=cmap,
@@ -188,7 +190,7 @@ def plot_angle_z_histogram(
     if orientation == "angle_z":
         cbar.ax.xaxis.set_ticks_position("top")
         cbar.ax.xaxis.set_label_position("top")
-        ax.set_xlabel("OH angle to +z (degrees)")
+        ax.set_xlabel(angle_label)
         ax.set_ylabel(z_label.replace("coordinate", "coordinate"))
         ax.set_xlim(float(angle_centers.min()), float(angle_centers.max()))
         ax.set_ylim(float(z_centers.min()), float(z_centers.max()))
@@ -196,7 +198,7 @@ def plot_angle_z_histogram(
         ax.yaxis.set_major_locator(MaxNLocator(6))
     else:
         ax.set_xlabel(z_label.replace("coordinate", "coordinate"))
-        ax.set_ylabel("OH angle to +z (degrees)")
+        ax.set_ylabel(angle_label)
         ax.set_xlim(float(z_centers.min()), float(z_centers.max()))
         ax.set_ylim(float(angle_centers.min()), float(angle_centers.max()))
         if invert_angle_axis:
@@ -261,6 +263,7 @@ def _plot_sharedz_angle_z_histogram(
     angle_centers: np.ndarray,
     hist: np.ndarray,
     z_label: str,
+    angle_label: str,
     log: bool,
     style: str,
     cmap_name: str,
@@ -398,7 +401,7 @@ def _plot_sharedz_angle_z_histogram(
 
         ax.set_xlim(0, 180)
         ax.set_ylim(z_min, z_max)
-        ax.set_xlabel(r"OH angle to +z ($^\circ$)", fontsize=12, labelpad=10)
+        ax.set_xlabel(angle_label, fontsize=12, labelpad=10)
         if show_y_label:
             ax.set_ylabel(z_label, labelpad=10)
         else:

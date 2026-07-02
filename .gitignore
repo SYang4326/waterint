@@ -7,5 +7,5 @@ __pycache__/
 build/
 dist/
 *.egg-info/
-examples/**/output/
+examples/**/output*/
 .DS_Store

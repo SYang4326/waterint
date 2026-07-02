@@ -25,6 +25,26 @@ class AngleZTests(unittest.TestCase):
             self.assertGreater(float(result.histograms[label].sum()), 0.0)
         self.assertTrue(result.metadata_path.exists())
 
+    def test_angle_z_bisector_counts_one_vector_per_oxygen(self):
+        root = Path(__file__).resolve().parents[1]
+        config = load_config(root / "examples/angle_z_lammpstrj/config.yaml")
+        config["angle"]["vector_mode"] = "oh_bisector"
+        config["output"]["directory"] = str(root / "examples/angle_z_lammpstrj/output_bisector")
+        config["output"]["prefix"] = "angle_z_bisector"
+        output = Path(config["output"]["directory"])
+        if output.exists():
+            shutil.rmtree(output)
+
+        result = run_angle_z(config)
+
+        self.assertEqual(result.bond_counts_total["OH-"], 2)
+        self.assertEqual(result.bond_counts_total["H2O"], 8)
+        self.assertEqual(result.bond_counts_total["H3O+"], 6)
+        self.assertEqual(result.sample_counts_total["OH-"], 2)
+        self.assertEqual(result.sample_counts_total["H2O"], 4)
+        self.assertEqual(result.sample_counts_total["H3O+"], 2)
+        self.assertEqual(float(result.histograms["H2O"].sum()), 2.0)
+
 
 if __name__ == "__main__":
     unittest.main()

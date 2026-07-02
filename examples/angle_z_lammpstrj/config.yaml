@@ -28,6 +28,7 @@ coordinate:
   bins: 10
 
 angle:
+  vector_mode: oh_bond
   range: [0.0, 180.0]
   bins: 18
   axis_sign: 1

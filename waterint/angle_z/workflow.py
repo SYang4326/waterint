@@ -181,6 +181,7 @@ def run_angle_z(config: dict[str, Any]) -> AngleZResult:
                 colorbar_top_height_px=float(output_cfg.get("colorbar_top_height_px", 34.0)),
                 colorbar_tick_size=float(output_cfg.get("colorbar_tick_size", 9.0)),
                 colorbar_title_size=float(output_cfg.get("colorbar_title_size", 10.0)),
+                hide_first_colorbar_tick_label=bool(output_cfg.get("hide_first_colorbar_tick_label", False)),
                 smooth_sigma=float(output_cfg.get("smooth_sigma", 0.8)),
                 log_vmin=_optional_float(output_cfg.get("log_vmin")),
                 log_vmax=_optional_float(output_cfg.get("log_vmax")),

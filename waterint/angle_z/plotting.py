@@ -34,6 +34,7 @@ def plot_angle_z_histogram(
     colorbar_top_height_px: float = 34.0,
     colorbar_tick_size: float = 9.0,
     colorbar_title_size: float = 10.0,
+    hide_first_colorbar_tick_label: bool = False,
     smooth_sigma: float = 0.8,
     log_vmin: float | None = None,
     log_vmax: float | None = None,
@@ -72,6 +73,7 @@ def plot_angle_z_histogram(
             colorbar_top_height_px=colorbar_top_height_px,
             colorbar_tick_size=colorbar_tick_size,
             colorbar_title_size=colorbar_title_size,
+            hide_first_colorbar_tick_label=hide_first_colorbar_tick_label,
             smooth_sigma=smooth_sigma,
             log_vmin=log_vmin,
             log_vmax=log_vmax,
@@ -222,11 +224,34 @@ def _levels(data: np.ndarray, *, log: bool, norm: LogNorm | None) -> np.ndarray 
 
 
 def _log_ticks(vmin: float, vmax: float) -> np.ndarray:
-    candidates = np.asarray([1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0], dtype=float)
+    if not np.isfinite(vmin) or not np.isfinite(vmax) or vmin <= 0 or vmax <= 0:
+        return np.asarray([], dtype=float)
+    lo = int(np.floor(np.log10(vmin)))
+    hi = int(np.ceil(np.log10(vmax)))
+    candidates = np.asarray([10.0 ** power for power in range(lo, hi + 1)], dtype=float)
     ticks = candidates[(candidates >= vmin) & (candidates <= vmax)]
-    if ticks.size > 3:
-        ticks = ticks[::2]
+    if ticks.size > 4:
+        step = int(np.ceil(ticks.size / 4))
+        ticks = ticks[::step]
     return ticks
+
+
+def _log_formatter_with_optional_hidden_first(ticks: np.ndarray, *, hide_first: bool):
+    import matplotlib.ticker as mticker
+
+    first_tick = float(ticks[0]) if hide_first and len(ticks) else None
+
+    def format_tick(value: float, position: int | None = None) -> str:
+        if first_tick is not None and np.isclose(value, first_tick, rtol=1e-9, atol=0.0):
+            return ""
+        if value > 0:
+            exponent = np.log10(value)
+            rounded = int(round(exponent))
+            if np.isclose(exponent, rounded, rtol=1e-9, atol=1e-9):
+                return rf"$\mathdefault{{10^{{{rounded}}}}}$"
+        return f"{value:.1e}"
+
+    return mticker.FuncFormatter(format_tick)
 
 
 def _plot_sharedz_angle_z_histogram(
@@ -253,6 +278,7 @@ def _plot_sharedz_angle_z_histogram(
     colorbar_top_height_px: float,
     colorbar_tick_size: float,
     colorbar_title_size: float,
+    hide_first_colorbar_tick_label: bool,
     smooth_sigma: float,
     log_vmin: float | None,
     log_vmax: float | None,
@@ -289,7 +315,8 @@ def _plot_sharedz_angle_z_histogram(
     })
 
     try:
-        plot_data = np.asarray(hist, dtype=float)
+        raw_data = np.asarray(hist, dtype=float)
+        plot_data = raw_data.copy()
         if smooth_sigma > 0:
             try:
                 from scipy.ndimage import gaussian_filter
@@ -298,12 +325,13 @@ def _plot_sharedz_angle_z_histogram(
             except ImportError:
                 pass
 
-        positive = plot_data[plot_data > 0]
+        norm_source = raw_data if log_vmin is None or log_vmax is None else plot_data
+        positive = norm_source[norm_source > 0]
         if positive.size:
-            vmin = max(float(positive.min()), 1e-5) if log_vmin is None else max(float(log_vmin), 1e-12)
+            vmin = max(float(positive.min()), 1e-300) if log_vmin is None else max(float(log_vmin), 1e-300)
             vmax = float(positive.max()) if log_vmax is None else float(log_vmax)
         else:
-            vmin = 1e-5 if log_vmin is None else max(float(log_vmin), 1e-12)
+            vmin = 1e-12 if log_vmin is None else max(float(log_vmin), 1e-300)
             vmax = vmin * 10 if log_vmax is None else float(log_vmax)
         norm = LogNorm(vmin=vmin, vmax=vmax) if log else None
         threshold = vmin if mask_threshold is None else float(mask_threshold)
@@ -395,8 +423,8 @@ def _plot_sharedz_angle_z_histogram(
         ax.grid(True, linestyle="--", linewidth=1, alpha=0.3)
 
         if colorbar_mode == "right":
-            ticks = [t for t in [1e-5, 1e-4, 1e-3, 1e-2, 1e-1] if vmin <= t <= vmax]
-            if len(ticks) < 2:
+            ticks = _log_ticks(vmin, vmax)
+            if ticks.size < 2:
                 ticks = [vmin, vmax]
             cbar_height = float(colorbar_height) * axis_height
             cbar_bottom = axis_bottom + (float(colorbar_center) * axis_height) - 0.5 * cbar_height
@@ -407,14 +435,19 @@ def _plot_sharedz_angle_z_histogram(
                 cbar_height,
             ])
             cb = fig.colorbar(artist, cax=cax, orientation="vertical", ticks=ticks)
-            cb.ax.yaxis.set_major_formatter(mticker.LogFormatterMathtext(base=10))
+            cb.ax.yaxis.set_major_formatter(
+                _log_formatter_with_optional_hidden_first(
+                    np.asarray(ticks, dtype=float),
+                    hide_first=hide_first_colorbar_tick_label,
+                )
+            )
             cb.ax.yaxis.set_minor_locator(mticker.NullLocator())
             cb.ax.tick_params(labelsize=float(colorbar_tick_size), length=2.5, pad=2)
             cb.outline.set_linewidth(0.9)
             cb.ax.set_title("P", fontsize=float(colorbar_title_size), pad=3)
         elif colorbar_mode == "top":
-            ticks = [t for t in [1e-5, 1e-4, 1e-3, 1e-2, 1e-1] if vmin <= t <= vmax]
-            if len(ticks) < 2:
+            ticks = _log_ticks(vmin, vmax)
+            if ticks.size < 2:
                 ticks = [vmin, vmax]
             cbar_bottom = axis_bottom + axis_height + float(colorbar_top_pad_px) / fig_h_px
             cax = fig.add_axes([
@@ -424,7 +457,12 @@ def _plot_sharedz_angle_z_histogram(
                 float(colorbar_top_height_px) / fig_h_px,
             ])
             cb = fig.colorbar(artist, cax=cax, orientation="horizontal", ticks=ticks)
-            cb.ax.xaxis.set_major_formatter(mticker.LogFormatterMathtext(base=10))
+            cb.ax.xaxis.set_major_formatter(
+                _log_formatter_with_optional_hidden_first(
+                    np.asarray(ticks, dtype=float),
+                    hide_first=hide_first_colorbar_tick_label,
+                )
+            )
             cb.ax.xaxis.set_minor_locator(mticker.NullLocator())
             cb.ax.tick_params(labelsize=float(colorbar_tick_size), length=2.5, pad=1)
             cb.outline.set_linewidth(0.9)

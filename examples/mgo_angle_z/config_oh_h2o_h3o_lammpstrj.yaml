@@ -58,10 +58,9 @@ output:
   colorbar_top_height_px: 28
   colorbar_tick_size: 8
   colorbar_title_size: 9
+  hide_first_colorbar_tick_label: true
   invert_angle_axis: false
   smooth_sigma: 0.9
-  log_vmin: 1.0e-5
-  mask_threshold: 1.0e-5
   cmap: turbo
   title: ""
   z_label: "z' (Å)"

@@ -26,6 +26,14 @@ def plot_angle_z_histogram(
     show_y_label: bool = True,
     display_z_max: float | None = None,
     mask_threshold: float | None = None,
+    colorbar_height: float = 0.36,
+    colorbar_width_px: float = 30.0,
+    colorbar_x_px: float = 900.0,
+    colorbar_center: float = 0.50,
+    colorbar_top_pad_px: float = 38.0,
+    colorbar_top_height_px: float = 34.0,
+    colorbar_tick_size: float = 9.0,
+    colorbar_title_size: float = 10.0,
     smooth_sigma: float = 0.8,
     log_vmin: float | None = None,
     log_vmax: float | None = None,
@@ -56,6 +64,14 @@ def plot_angle_z_histogram(
             show_y_label=show_y_label,
             display_z_max=display_z_max,
             mask_threshold=mask_threshold,
+            colorbar_height=colorbar_height,
+            colorbar_width_px=colorbar_width_px,
+            colorbar_x_px=colorbar_x_px,
+            colorbar_center=colorbar_center,
+            colorbar_top_pad_px=colorbar_top_pad_px,
+            colorbar_top_height_px=colorbar_top_height_px,
+            colorbar_tick_size=colorbar_tick_size,
+            colorbar_title_size=colorbar_title_size,
             smooth_sigma=smooth_sigma,
             log_vmin=log_vmin,
             log_vmax=log_vmax,
@@ -229,6 +245,14 @@ def _plot_sharedz_angle_z_histogram(
     show_y_label: bool,
     display_z_max: float | None,
     mask_threshold: float | None,
+    colorbar_height: float,
+    colorbar_width_px: float,
+    colorbar_x_px: float,
+    colorbar_center: float,
+    colorbar_top_pad_px: float,
+    colorbar_top_height_px: float,
+    colorbar_tick_size: float,
+    colorbar_title_size: float,
     smooth_sigma: float,
     log_vmin: float | None,
     log_vmax: float | None,
@@ -297,7 +321,13 @@ def _plot_sharedz_angle_z_histogram(
         angle_min = float(angle_centers.min() - 0.5 * da)
         angle_max = float(angle_centers.max() + 0.5 * da)
 
-        fig_w_px, fig_h_px = 1050, 1706
+        if colorbar_mode == "auto":
+            colorbar_mode = "right"
+
+        fig_w_px = 1050
+        fig_h_px = 1706
+        if colorbar_mode == "top":
+            fig_h_px += int(round(float(colorbar_top_pad_px) + float(colorbar_top_height_px) + 58))
         axis_left = 80 / fig_w_px
         axis_bottom = 201 / fig_h_px
         axis_width = 600 / fig_w_px
@@ -364,23 +394,55 @@ def _plot_sharedz_angle_z_histogram(
         ax.yaxis.set_minor_locator(mticker.NullLocator())
         ax.grid(True, linestyle="--", linewidth=1, alpha=0.3)
 
-        if colorbar_mode == "auto":
-            colorbar_mode = "right"
         if colorbar_mode == "right":
             ticks = [t for t in [1e-5, 1e-4, 1e-3, 1e-2, 1e-1] if vmin <= t <= vmax]
             if len(ticks) < 2:
                 ticks = [vmin, vmax]
-            cax = fig.add_axes([900 / fig_w_px, axis_bottom + 0.24 * axis_height, 42 / fig_w_px, 0.48 * axis_height])
+            cbar_height = float(colorbar_height) * axis_height
+            cbar_bottom = axis_bottom + (float(colorbar_center) * axis_height) - 0.5 * cbar_height
+            cax = fig.add_axes([
+                float(colorbar_x_px) / fig_w_px,
+                cbar_bottom,
+                float(colorbar_width_px) / fig_w_px,
+                cbar_height,
+            ])
             cb = fig.colorbar(artist, cax=cax, orientation="vertical", ticks=ticks)
             cb.ax.yaxis.set_major_formatter(mticker.LogFormatterMathtext(base=10))
             cb.ax.yaxis.set_minor_locator(mticker.NullLocator())
-            cb.ax.tick_params(labelsize=11, length=3, pad=2)
-            cb.outline.set_linewidth(1.0)
-            cb.ax.set_title("P", fontsize=11, pad=3)
+            cb.ax.tick_params(labelsize=float(colorbar_tick_size), length=2.5, pad=2)
+            cb.outline.set_linewidth(0.9)
+            cb.ax.set_title("P", fontsize=float(colorbar_title_size), pad=3)
+        elif colorbar_mode == "top":
+            ticks = [t for t in [1e-5, 1e-4, 1e-3, 1e-2, 1e-1] if vmin <= t <= vmax]
+            if len(ticks) < 2:
+                ticks = [vmin, vmax]
+            cbar_bottom = axis_bottom + axis_height + float(colorbar_top_pad_px) / fig_h_px
+            cax = fig.add_axes([
+                axis_left,
+                cbar_bottom,
+                axis_width,
+                float(colorbar_top_height_px) / fig_h_px,
+            ])
+            cb = fig.colorbar(artist, cax=cax, orientation="horizontal", ticks=ticks)
+            cb.ax.xaxis.set_major_formatter(mticker.LogFormatterMathtext(base=10))
+            cb.ax.xaxis.set_minor_locator(mticker.NullLocator())
+            cb.ax.tick_params(labelsize=float(colorbar_tick_size), length=2.5, pad=1)
+            cb.outline.set_linewidth(0.9)
+            cb.ax.xaxis.set_ticks_position("top")
+            cb.ax.xaxis.set_label_position("top")
+            cb.ax.text(
+                -0.035,
+                0.5,
+                "P",
+                transform=cb.ax.transAxes,
+                ha="right",
+                va="center",
+                fontsize=float(colorbar_title_size),
+            )
         elif colorbar_mode == "none":
             pass
         else:
-            raise ValueError("sharedz colorbar_mode must be right, none, or auto.")
+            raise ValueError("sharedz colorbar_mode must be right, top, none, or auto.")
 
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(path, dpi=dpi)

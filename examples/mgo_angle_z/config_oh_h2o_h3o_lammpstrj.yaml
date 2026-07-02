@@ -25,7 +25,7 @@ coordinate:
   reference:
     type: slab_surface
     species: ["Mg"]
-  surface: max
+    surface: max
   range: [-1.0, 8.0]
   bins: 180
 
@@ -45,11 +45,19 @@ output:
   style: imshow
   orientation: angle_z
   figure_preset: sharedz
-  colorbar_mode: right
+  colorbar_mode: top
   colormap_style: convention
   yaxis_side: right
   show_y_label: true
   display_z_max: 8.0
+  colorbar_height: 0.34
+  colorbar_width_px: 28
+  colorbar_x_px: 910
+  colorbar_center: 0.50
+  colorbar_top_pad_px: 24
+  colorbar_top_height_px: 28
+  colorbar_tick_size: 8
+  colorbar_title_size: 9
   invert_angle_axis: false
   smooth_sigma: 0.9
   log_vmin: 1.0e-5

@@ -1,0 +1,20 @@
+sfg:
+  mode: combine_bins
+  input_directory: input
+  runs: ["900ps", "1200ps"]
+  bins: ["0_1d5", "all"]
+  cf_prefix: ssVVCF
+  include_nh1: false
+  nzeros: 32
+
+output:
+  directory: output
+  prefix: sfg_combine_bins
+  plot: true
+  overlay_all: FT_bins_all.png
+  xmin: 0.0
+  xmax: 4500.0
+  flip: true
+  top_scale: 0.96
+  palette: project
+  title: "Overall FT across bins"

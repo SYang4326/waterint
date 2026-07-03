@@ -5,7 +5,9 @@ import argparse
 from waterint.angle_z import run_angle_z
 from waterint.config import load_config
 from waterint.density import run_density
+from waterint.hbond import run_hbond
 from waterint.io.npz import write_npz_from_lammpstrj
+from waterint.sfg import run_sfg
 
 
 def _parse_type_map_entries(entries: list[str]) -> dict[int, str]:
@@ -28,6 +30,12 @@ def main(argv: list[str] | None = None) -> int:
     angle_z_parser = subparsers.add_parser("angle-z", help="Run an O-H angle vs coordinate 2D histogram.")
     angle_z_parser.add_argument("--config", required=True, help="YAML config file.")
 
+    hbond_parser = subparsers.add_parser("hbond", help="Run H-bond topology analysis by oxygen species.")
+    hbond_parser.add_argument("--config", required=True, help="YAML config file.")
+
+    sfg_parser = subparsers.add_parser("sfg", help="Run SFG CF postprocessing and plotting.")
+    sfg_parser.add_argument("--config", required=True, help="YAML config file.")
+
     convert_parser = subparsers.add_parser("convert-lammpstrj", help="Convert a LAMMPS dump trajectory to WaterInt NPZ.")
     convert_parser.add_argument("--input", required=True, help="Input LAMMPS dump trajectory.")
     convert_parser.add_argument("--output", required=True, help="Output NPZ trajectory cache.")
@@ -49,6 +57,26 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "angle-z":
         result = run_angle_z(load_config(args.config))
         for path in result.csv_paths.values():
+            print(f"Wrote: {path}")
+        for path in result.png_paths.values():
+            print(f"Wrote: {path}")
+        print(f"Wrote: {result.metadata_path}")
+        return 0
+
+    if args.command == "hbond":
+        result = run_hbond(load_config(args.config))
+        print(f"Wrote: {result.csv_path}")
+        print(f"Wrote: {result.raw_csv_path}")
+        if result.png_path:
+            print(f"Wrote: {result.png_path}")
+        print(f"Wrote: {result.metadata_path}")
+        return 0
+
+    if args.command == "sfg":
+        result = run_sfg(load_config(args.config))
+        for path in result.cf_paths.values():
+            print(f"Wrote: {path}")
+        for path in result.ft_paths.values():
             print(f"Wrote: {path}")
         for path in result.png_paths.values():
             print(f"Wrote: {path}")

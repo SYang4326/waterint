@@ -1,0 +1,14 @@
+sfg:
+  mode: single
+  cf: input/single_cf.dat
+  time_unit: ps
+  nzeros: 32
+
+output:
+  directory: output
+  prefix: single_cf
+  plot: true
+  xmin: 0.0
+  xmax: 4500.0
+  flip: true
+  title: "Single SFG CF"

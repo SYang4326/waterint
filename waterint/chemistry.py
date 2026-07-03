@@ -23,6 +23,8 @@ def classify_oxygen_by_h_count(
     oxygen_chunk_size: int = 2048,
     oxygen_indices: np.ndarray | None = None,
     hydrogen_indices: np.ndarray | None = None,
+    cell: tuple[float, float, float] | None = None,
+    pbc: tuple[bool, bool, bool] | None = None,
 ) -> dict[str, np.ndarray]:
     """Classify oxygen atoms by the number of hydrogens within a cutoff.
 
@@ -69,6 +71,8 @@ def classify_oxygen_by_h_count(
         method=neighbor_method,
         workers=neighbor_workers,
         oxygen_chunk_size=oxygen_chunk_size,
+        cell=cell,
+        pbc=pbc,
     )
 
     for oxygen_index, h_count in zip(oxygen_indices, h_counts):
@@ -90,6 +94,8 @@ def oxygen_hydrogen_pairs_by_species(
     oxygen_chunk_size: int = 2048,
     oxygen_indices: np.ndarray | None = None,
     hydrogen_indices: np.ndarray | None = None,
+    cell: tuple[float, float, float] | None = None,
+    pbc: tuple[bool, bool, bool] | None = None,
 ) -> dict[str, np.ndarray]:
     """Return O-H pairs grouped by the oxygen species label.
 
@@ -129,6 +135,8 @@ def oxygen_hydrogen_pairs_by_species(
         method=neighbor_method,
         workers=neighbor_workers,
         oxygen_chunk_size=oxygen_chunk_size,
+        cell=cell,
+        pbc=pbc,
     )
     for oxygen_index, local_hydrogen_indices in zip(oxygen_indices, neighbor_lists):
         label = OXYGEN_SPECIES_BY_H_COUNT.get(len(local_hydrogen_indices), "O_other")
@@ -150,6 +158,8 @@ def oxygen_hydrogen_neighbors_by_species(
     oxygen_chunk_size: int = 2048,
     oxygen_indices: np.ndarray | None = None,
     hydrogen_indices: np.ndarray | None = None,
+    cell: tuple[float, float, float] | None = None,
+    pbc: tuple[bool, bool, bool] | None = None,
 ) -> dict[str, list[tuple[int, np.ndarray]]]:
     """Return local O-H neighbor lists grouped by oxygen species label.
 
@@ -189,6 +199,8 @@ def oxygen_hydrogen_neighbors_by_species(
         method=neighbor_method,
         workers=neighbor_workers,
         oxygen_chunk_size=oxygen_chunk_size,
+        cell=cell,
+        pbc=pbc,
     )
     for oxygen_index, local_hydrogen_indices in zip(oxygen_indices, neighbor_lists):
         label = OXYGEN_SPECIES_BY_H_COUNT.get(len(local_hydrogen_indices), "O_other")
@@ -206,12 +218,18 @@ def _count_hydrogen_neighbors(
     method: str,
     workers: int,
     oxygen_chunk_size: int,
+    cell: tuple[float, float, float] | None,
+    pbc: tuple[bool, bool, bool] | None,
 ) -> np.ndarray:
     method = str(method).lower()
     if method not in {"auto", "kdtree", "matrix"}:
         raise ValueError("selection.neighbor_method must be auto, kdtree, or matrix.")
 
-    if method in {"auto", "kdtree"}:
+    use_pbc = _uses_pbc(pbc)
+    if use_pbc and method == "kdtree":
+        raise ValueError("selection.neighbor_method: kdtree does not support pbc-aware O-H assignment; use auto or matrix.")
+
+    if method in {"auto", "kdtree"} and not use_pbc:
         try:
             return _count_hydrogen_neighbors_kdtree(
                 oxygen_positions=oxygen_positions,
@@ -228,6 +246,8 @@ def _count_hydrogen_neighbors(
         hydrogen_positions=hydrogen_positions,
         cutoff=cutoff,
         oxygen_chunk_size=oxygen_chunk_size,
+        cell=cell,
+        pbc=pbc,
     )
 
 
@@ -239,12 +259,18 @@ def _hydrogen_neighbor_lists(
     method: str,
     workers: int,
     oxygen_chunk_size: int,
+    cell: tuple[float, float, float] | None,
+    pbc: tuple[bool, bool, bool] | None,
 ) -> list[np.ndarray]:
     method = str(method).lower()
     if method not in {"auto", "kdtree", "matrix"}:
         raise ValueError("selection.neighbor_method must be auto, kdtree, or matrix.")
 
-    if method in {"auto", "kdtree"}:
+    use_pbc = _uses_pbc(pbc)
+    if use_pbc and method == "kdtree":
+        raise ValueError("selection.neighbor_method: kdtree does not support pbc-aware O-H assignment; use auto or matrix.")
+
+    if method in {"auto", "kdtree"} and not use_pbc:
         try:
             return _hydrogen_neighbor_lists_kdtree(
                 oxygen_positions=oxygen_positions,
@@ -261,6 +287,8 @@ def _hydrogen_neighbor_lists(
         hydrogen_positions=hydrogen_positions,
         cutoff=cutoff,
         oxygen_chunk_size=oxygen_chunk_size,
+        cell=cell,
+        pbc=pbc,
     )
 
 
@@ -293,6 +321,8 @@ def _hydrogen_neighbor_lists_matrix(
     hydrogen_positions: np.ndarray,
     cutoff: float,
     oxygen_chunk_size: int,
+    cell: tuple[float, float, float] | None,
+    pbc: tuple[bool, bool, bool] | None,
 ) -> list[np.ndarray]:
     cutoff2 = cutoff * cutoff
     out: list[np.ndarray] = []
@@ -300,6 +330,7 @@ def _hydrogen_neighbor_lists_matrix(
         stop = min(start + oxygen_chunk_size, oxygen_positions.shape[0])
         oxygen_chunk = oxygen_positions[start:stop]
         d = hydrogen_positions[:, None, :] - oxygen_chunk[None, :, :]
+        d = _minimum_image(d, cell=cell, pbc=pbc)
         dist2 = np.sum(d * d, axis=2)
         out.extend(np.where(dist2[:, i] <= cutoff2)[0] for i in range(stop - start))
     return [np.asarray(items, dtype=int) for items in out]
@@ -340,6 +371,8 @@ def _count_hydrogen_neighbors_matrix(
     hydrogen_positions: np.ndarray,
     cutoff: float,
     oxygen_chunk_size: int,
+    cell: tuple[float, float, float] | None,
+    pbc: tuple[bool, bool, bool] | None,
 ) -> np.ndarray:
     cutoff2 = cutoff * cutoff
     h_counts = np.empty(oxygen_positions.shape[0], dtype=int)
@@ -347,6 +380,27 @@ def _count_hydrogen_neighbors_matrix(
         stop = min(start + oxygen_chunk_size, oxygen_positions.shape[0])
         oxygen_chunk = oxygen_positions[start:stop]
         d = hydrogen_positions[:, None, :] - oxygen_chunk[None, :, :]
+        d = _minimum_image(d, cell=cell, pbc=pbc)
         dist2 = np.sum(d * d, axis=2)
         h_counts[start:stop] = np.sum(dist2 <= cutoff2, axis=0)
     return h_counts
+
+
+def _uses_pbc(pbc: tuple[bool, bool, bool] | None) -> bool:
+    return bool(pbc is not None and any(pbc))
+
+
+def _minimum_image(
+    vectors: np.ndarray,
+    *,
+    cell: tuple[float, float, float] | None,
+    pbc: tuple[bool, bool, bool] | None,
+) -> np.ndarray:
+    if cell is None or pbc is None or not any(pbc):
+        return vectors
+    out = np.asarray(vectors, dtype=float).copy()
+    cell_array = np.asarray(cell, dtype=float)
+    for axis, enabled in enumerate(pbc):
+        if enabled:
+            out[..., axis] -= np.rint(out[..., axis] / cell_array[axis]) * cell_array[axis]
+    return out

@@ -13,6 +13,8 @@ Implemented:
 - WaterInt NPZ trajectory cache for faster repeated analysis of large LAMMPS dump files
 - 1D density profile along `x`, `y`, `z`, `-x`, `-y`, or `-z`
 - O-H bond angle vs coordinate 2D histograms for `OH-`, `H2O`, and `H3O+`
+- H-bond topology fractions for oxygen species, with species-specific topology classes
+- SFG/ssVVCF postprocessing: combine correlation functions, Fourier transform, and plot spectra
 - element-based selection
 - configurable coordinate range and bin count
 - absolute coordinates, coordinates relative to an element mean, or coordinates relative to a slab surface
@@ -21,11 +23,11 @@ Implemented:
 - CSV, PNG, and metadata JSON outputs
 - command-line entry point: `waterint density --config config.yaml`
 - command-line entry point: `waterint angle-z --config config.yaml`
+- command-line entry point: `waterint hbond --config config.yaml`
+- command-line entry point: `waterint sfg --config config.yaml`
 
 Planned:
 
-- OH bond orientation
-- H-bond analysis
 - richer trajectory formats
 - selection language beyond element names
 - nanoconfinement/interfacial presets
@@ -84,6 +86,27 @@ python -m waterint.cli angle-z --config examples/angle_z_lammpstrj/config.yaml
 ```
 
 This writes one 2D histogram per requested oxygen species. The current angle convention is the O-to-H bond vector angle to the configured coordinate axis, in degrees. The coordinate position is the oxygen position, using the same absolute/reference/slab-relative coordinate modes as the density workflow.
+
+Run an H-bond topology example:
+
+```bash
+python -m waterint.cli hbond --config examples/hbond_lammpstrj/config.yaml
+```
+
+This classifies each requested oxygen species by donated and accepted H-bonds. For example, `DDAA` means two donated and two accepted H-bonds, while `DA` means one donated and one accepted H-bond. The default topology labels are species-specific: `OH-` does not show impossible double-donor classes, and `H3O+` uses classes such as `DDDA` and `DDD`. The first implementation uses an O-O cutoff plus a D-H-A angle criterion; both are set in the config.
+The grouped CSV is accompanied by a raw topology CSV, which lists every observed donor/acceptor label before uncommon labels are merged into `other`.
+
+Run an SFG postprocessing example:
+
+```bash
+python -m waterint.cli sfg --config examples/sfg_cf/config_combine_bins.yaml
+```
+
+This module covers both a Python trajectory-to-spectrum path and the original postprocessing path. In trajectory mode, WaterInt assigns each H to its nearest O, builds continuous O-H segments, computes ssVVCF from the stretch velocity and dipole-velocity proxy, writes the CF, performs a DCT-based FT using the existing unit convention, and plots the spectrum. The first Python calculator uses finite-difference velocities from positions, so production runs should set the real `sfg.dt_ps` explicitly and use sufficiently dense trajectory frames.
+
+```bash
+python -m waterint.cli sfg --config examples/sfg_trajectory/config.yaml
+```
 
 For repeated analysis of the same large LAMMPS dump, first convert it to a WaterInt NPZ cache:
 

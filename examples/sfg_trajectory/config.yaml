@@ -1,0 +1,30 @@
+input:
+  trajectory: input/small_oh.lammpstrj
+  format: lammpstrj
+  type_map:
+    1: H
+    2: O
+
+system:
+  cell: auto
+
+sfg:
+  mode: trajectory
+  hydrogen_symbol: H
+  oxygen_symbol: O
+  dt_ps: 0.001
+  lag_ps: 0.003
+  pbc: [true, true, false]
+  z_ref0: 0.0
+  mu_mode: full
+  symmetrize: true
+  nzeros: 32
+
+output:
+  directory: output
+  prefix: sfg_small_oh
+  plot: true
+  xmin: 0.0
+  xmax: 4500.0
+  flip: true
+  title: "Toy trajectory SFG"

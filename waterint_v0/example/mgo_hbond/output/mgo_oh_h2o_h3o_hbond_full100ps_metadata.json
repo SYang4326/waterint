@@ -1,0 +1,126 @@
+{
+  "analysis_name": "hbond",
+  "package": "waterint_v0",
+  "config_file": "/Users/mapple/Desktop/LifeOS/20_projects/waterint/waterint_v0/example/mgo_hbond/config_oh_h2o_h3o_npz.yaml",
+  "trajectory": "/Users/mapple/Desktop/LifeOS/20_projects/waterint/waterint_v0/example/mgo_hbond/../shared/input/dump.MgO_water_2x2_equil.last100ps.unique.waterint.npz",
+  "frames": 20001,
+  "species_labels": [
+    "OH-",
+    "H2O",
+    "H3O+"
+  ],
+  "classes": {
+    "OH-": [
+      "DAAA",
+      "DAA",
+      "DA",
+      "AAA",
+      "AA",
+      "A",
+      "other"
+    ],
+    "H2O": [
+      "DDAA",
+      "DDA",
+      "DAA",
+      "DA",
+      "AA",
+      "A",
+      "other"
+    ],
+    "H3O+": [
+      "DDDA",
+      "DDD",
+      "DDA",
+      "DD",
+      "DA",
+      "D",
+      "other"
+    ]
+  },
+  "samples_total": {
+    "OH-": 1367400,
+    "H2O": 7731905,
+    "H3O+": 0
+  },
+  "outputs": {
+    "csv": "/Users/mapple/Desktop/LifeOS/20_projects/waterint/waterint_v0/example/mgo_hbond/output/mgo_oh_h2o_h3o_hbond_full100ps.csv",
+    "raw_csv": "/Users/mapple/Desktop/LifeOS/20_projects/waterint/waterint_v0/example/mgo_hbond/output/mgo_oh_h2o_h3o_hbond_full100ps_raw.csv",
+    "png": "/Users/mapple/Desktop/LifeOS/20_projects/waterint/waterint_v0/example/mgo_hbond/output/mgo_oh_h2o_h3o_hbond_full100ps.png"
+  },
+  "config": {
+    "input": {
+      "trajectory": "../shared/input/dump.MgO_water_2x2_equil.last100ps.unique.waterint.npz",
+      "format": "npz",
+      "type_map": {
+        "1": "H",
+        "2": "Mg",
+        "3": "O"
+      },
+      "max_frames": "all",
+      "stride": 1
+    },
+    "system": {
+      "cell": "auto"
+    },
+    "selection": {
+      "oxygen_species": [
+        "OH-",
+        "H2O",
+        "H3O+"
+      ],
+      "oxygen_symbol": "O",
+      "hydrogen_symbol": "H",
+      "oh_cutoff": 1.25,
+      "neighbor_method": "auto",
+      "neighbor_workers": 1
+    },
+    "hbond": {
+      "oo_cutoff": 3.5,
+      "dha_angle_min": 150.0,
+      "h_acceptor_cutoff": null,
+      "max_acceptors_per_hydrogen": true,
+      "pbc": [
+        true,
+        true,
+        false
+      ],
+      "classes_by_species": {
+        "OH-": [
+          "DAAA",
+          "DAA",
+          "DA",
+          "AAA",
+          "AA",
+          "A",
+          "other"
+        ],
+        "H2O": [
+          "DDAA",
+          "DDA",
+          "DAA",
+          "DA",
+          "AA",
+          "A",
+          "other"
+        ],
+        "H3O+": [
+          "DDDA",
+          "DDD",
+          "DDA",
+          "DD",
+          "DA",
+          "D",
+          "other"
+        ]
+      }
+    },
+    "output": {
+      "directory": "output",
+      "prefix": "mgo_oh_h2o_h3o_hbond_full100ps",
+      "plot": true,
+      "show_empty_species": false,
+      "title": "H-bond topology fractions"
+    }
+  }
+}

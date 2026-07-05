@@ -8,4 +8,5 @@ build/
 dist/
 *.egg-info/
 examples/**/output*/
+waterint_v0/example/shared/input/*.npz
 .DS_Store

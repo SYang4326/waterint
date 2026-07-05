@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 import sys
 import time
@@ -24,10 +25,26 @@ RUNS = [
     ("sfg", run_sfg, "mgo_sfg/config_100ps_npz.yaml"),
 ]
 
+DEFAULT_ANALYSES = {"density", "oh_orientation", "sfg"}
+
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Run MgO-water example workflows.")
+    parser.add_argument(
+        "--include-hbond",
+        action="store_true",
+        help="Also run the full 100 ps H-bond example. This can take about an hour on a laptop.",
+    )
+    parser.add_argument(
+        "--only",
+        choices=["density", "oh_orientation", "hbond", "sfg"],
+        help="Run only one analysis.",
+    )
+    args = parser.parse_args()
+
+    selected = _selected_runs(include_hbond=args.include_hbond, only=args.only)
     failures: list[tuple[str, str]] = []
-    for index, (name, runner, rel_config) in enumerate(RUNS, 1):
+    for index, (name, runner, rel_config) in enumerate(selected, 1):
         config_path = EXAMPLE_ROOT / rel_config
         start = time.perf_counter()
         print(f"RUN  {index:02d} {name:14s} {rel_config}", flush=True)
@@ -47,6 +64,15 @@ def main() -> int:
             print(f"- {rel_config}: {message}")
         return 1
     return 0
+
+
+def _selected_runs(*, include_hbond: bool, only: str | None) -> list[tuple[str, object, str]]:
+    if only is not None:
+        return [run for run in RUNS if run[0] == only]
+    analyses = set(DEFAULT_ANALYSES)
+    if include_hbond:
+        analyses.add("hbond")
+    return [run for run in RUNS if run[0] in analyses]
 
 
 def _print_outputs(result: object) -> None:

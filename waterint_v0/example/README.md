@@ -25,11 +25,26 @@ window because the full trajectory-based SFG calculation is much heavier:
 but it is not part of the default example command because it uses all 20001
 frames and can take much longer.
 
-Run the default set from the repository root. This includes the full
-density/OH-orientation/H-bond examples and the short SFG example:
+Run the default set from the repository root. This includes the full density
+and OH-orientation examples, plus the short SFG example:
 
 ```bash
 python waterint_v0/example/run_examples.py
+```
+
+The full H-bond example is slower, so it is opt-in:
+
+```bash
+python waterint_v0/example/run_examples.py --include-hbond
+```
+
+Run a single workflow:
+
+```bash
+python waterint_v0/example/run_examples.py --only density
+python waterint_v0/example/run_examples.py --only oh_orientation
+python waterint_v0/example/run_examples.py --only hbond
+python waterint_v0/example/run_examples.py --only sfg
 ```
 
 Run one workflow manually:

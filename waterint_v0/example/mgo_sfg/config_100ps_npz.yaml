@@ -7,8 +7,10 @@ input:
     3: O
   max_frames: 200
   stride: 1
+
 system:
   cell: auto
+
 sfg:
   mode: trajectory
   hydrogen_symbol: H
@@ -16,12 +18,12 @@ sfg:
   dt_ps: 0.005
   lag_ps: 0.995
   pbc:
-  - true
-  - true
-  - false
+    - true
+    - true
+    - false
   reference:
     species:
-    - Mg
+      - Mg
     surface: max
   window:
     mode: 1
@@ -33,6 +35,7 @@ sfg:
   symmetrize: true
   sticky_A: 0.0
   nzeros: 2000
+
 output:
   directory: output
   prefix: mgo_100ps_sfg_quick200

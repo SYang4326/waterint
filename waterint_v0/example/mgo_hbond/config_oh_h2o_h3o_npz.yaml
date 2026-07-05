@@ -7,52 +7,56 @@ input:
     3: O
   max_frames: all
   stride: 1
+
 system:
   cell: auto
+
 selection:
   oxygen_species:
-  - OH-
-  - H2O
-  - H3O+
+    - OH-
+    - H2O
+    - H3O+
   oxygen_symbol: O
   hydrogen_symbol: H
   oh_cutoff: 1.25
   neighbor_method: auto
   neighbor_workers: 1
+
 hbond:
   oo_cutoff: 3.5
   dha_angle_min: 150.0
   h_acceptor_cutoff: null
   max_acceptors_per_hydrogen: true
   pbc:
-  - true
-  - true
-  - false
+    - true
+    - true
+    - false
   classes_by_species:
     OH-:
-    - DAAA
-    - DAA
-    - DA
-    - AAA
-    - AA
-    - A
-    - other
+      - DAAA
+      - DAA
+      - DA
+      - AAA
+      - AA
+      - A
+      - other
     H2O:
-    - DDAA
-    - DDA
-    - DAA
-    - DA
-    - AA
-    - A
-    - other
+      - DDAA
+      - DDA
+      - DAA
+      - DA
+      - AA
+      - A
+      - other
     H3O+:
-    - DDDA
-    - DDD
-    - DDA
-    - DD
-    - DA
-    - D
-    - other
+      - DDDA
+      - DDD
+      - DDA
+      - DD
+      - DA
+      - D
+      - other
+
 output:
   directory: output
   prefix: mgo_oh_h2o_h3o_hbond_full100ps

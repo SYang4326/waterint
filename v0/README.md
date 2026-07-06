@@ -1,10 +1,24 @@
 # WaterInt v0
 
-This directory contains the current WaterInt v0 code line.
+This directory contains the current WaterInt v0 code line. The directory is named `v0` for versioning, but the Python package inside is named `waterint`, so user-facing commands and source imports stay stable across future version lines.
 
-The directory is named `v0` for versioning, but the Python package inside is
-named `waterint`. User-facing commands and source imports should therefore use
-stable names such as:
+Public documentation:
+
+https://water-interface-analysis.syang4326m.workers.dev/
+
+## Install
+
+Install from the repository root, not from this subdirectory:
+
+```bash
+python -m pip install -e .
+```
+
+The root `pyproject.toml` points setuptools at `v0/waterint`.
+
+## Usage
+
+Use stable imports such as:
 
 ```python
 from waterint.workflows.density import run_density
@@ -15,13 +29,6 @@ and:
 ```bash
 waterint density --config v0/example/mgo_density/config_oh_h2o_npz.yaml
 ```
-
-## Version Information
-
-- Version line: `v0`
-- Last updated: 2026-07-06
-- Package name: `waterint`
-- Public website: https://syang4326.github.io/water-interface-analysis-site/
 
 ## Package Structure
 
@@ -43,16 +50,6 @@ The main analysis workflows are:
 - `hbond`: hydrogen-bond topology classification.
 - `sfg`: SFG/ssVVCF trajectory and postprocessing workflows.
 
-## Install
-
-Install from the repository root, not from this subdirectory:
-
-```bash
-python -m pip install -e .
-```
-
-The root `pyproject.toml` points setuptools at `v0/waterint`.
-
 ## Examples
 
 The publication-facing MgO-water examples are in [`example/`](example/).
@@ -66,3 +63,10 @@ waterint hbond --config v0/example/mgo_hbond/config_oh_h2o_h3o_npz.yaml
 The shared 100 ps MgO trajectory cache is large and should be distributed via a
 release asset, Git LFS, or an external data link rather than ordinary Git
 history.
+
+## Version Information
+
+- Version line: `v0`
+- Last updated: 2026-07-06
+- Package name: `waterint`
+- CLI command: `waterint`

@@ -49,6 +49,9 @@ def reference_for_frame(
     if spec.mode == "absolute":
         return 0.0
     reference_cfg = spec.reference or {}
+    fixed = fixed_reference_value(reference_cfg)
+    if fixed is not None:
+        return fixed
     if spec.mode == "relative_to_reference":
         return element_mean_reference(frame, spec.axis, reference_cfg, context)
     if spec.mode == "relative_to_slab":
@@ -74,7 +77,7 @@ def element_mean_reference(
 ) -> float:
     ref_type = str(reference_cfg.get("type", "element_mean"))
     if ref_type != "element_mean":
-        raise ValueError("Only reference.type: element_mean is implemented.")
+        raise ValueError("relative_to_reference requires reference.type: element_mean or fixed.")
     species = _species_list(reference_cfg, "reference.species")
     mask = element_mask(frame, set(species), context)
     if not np.any(mask):
@@ -91,7 +94,7 @@ def slab_surface_reference(
 ) -> float:
     ref_type = str(reference_cfg.get("type", "slab_surface"))
     if ref_type not in {"slab_surface", "element_surface"}:
-        raise ValueError("relative_to_slab requires reference.type: slab_surface.")
+        raise ValueError("relative_to_slab requires reference.type: slab_surface or fixed.")
     species = _species_list(reference_cfg, "reference.species")
     mask = element_mask(frame, set(species), context)
     values = frame.positions[mask, axis]
@@ -108,6 +111,15 @@ def slab_surface_reference(
     if surface == "mean":
         return float(np.mean(values))
     raise ValueError("reference.surface must be auto, max, min, or mean.")
+
+
+def fixed_reference_value(reference_cfg: dict[str, Any]) -> float | None:
+    ref_type = str(reference_cfg.get("type", "")).lower()
+    if ref_type not in {"fixed", "fixed_value"}:
+        return None
+    if "value" not in reference_cfg:
+        raise ValueError("reference.value is required when reference.type is fixed.")
+    return float(reference_cfg["value"])
 
 
 def _species_list(config: dict[str, Any], name: str) -> list[str]:

@@ -69,6 +69,8 @@ The main modules are:
 - `hbond`: hydrogen-bond topology classification by oxygen species.
 - `sfg`: trajectory-based interfacial O-H correlation and spectrum workflows.
 
+Coordinate references can be recomputed from selected atoms, such as a slab surface, or supplied as a fixed value when the reference plane is already known.
+
 ## Version Notes
 
 - Active version line: `v0`

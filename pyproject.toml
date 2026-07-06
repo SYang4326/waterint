@@ -19,7 +19,5 @@ dependencies = [
 waterint = "waterint.cli:main"
 
 [tool.setuptools.packages.find]
+where = ["v0"]
 include = ["waterint*"]
-
-[tool.setuptools.package-data]
-"waterint.ui" = ["static/*"]

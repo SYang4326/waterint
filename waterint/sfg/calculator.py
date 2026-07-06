@@ -11,6 +11,7 @@ from waterint.common import element_indices, element_mask, iter_frames, parse_ce
 from waterint.config import require_mapping
 from waterint.io.common import TrajectoryFrame
 from waterint.sfg.processing import write_cf
+from waterint.units import unit_system_from_config
 
 
 @dataclass(frozen=True)
@@ -35,21 +36,35 @@ def compute_ssvvcf_from_trajectory(config: dict[str, Any], output_prefix: Path) 
     input_cfg = require_mapping(config, "input")
     system_cfg = require_mapping(config, "system")
     sfg_cfg = require_mapping(config, "sfg")
+    units = unit_system_from_config(config)
+    sfg_internal = dict(sfg_cfg)
+    if isinstance(sfg_cfg.get("window"), dict):
+        window = dict(sfg_cfg["window"])
+        for key in ("z1", "z2", "ramp"):
+            if key in window:
+                window[key] = units.input_length(float(window[key]))
+        sfg_internal["window"] = window
     traj_path = resolve_path(config, input_cfg["trajectory"])
-    configured_cell = parse_cell(system_cfg.get("cell", "auto"))
+    configured_cell = parse_cell(system_cfg.get("cell", "auto"), units)
     context = selection_context(input_cfg)
 
-    frames = list(iter_frames(traj_path, input_cfg))
+    frames = list(iter_frames(traj_path, input_cfg, units))
     if len(frames) < 3:
         raise ValueError("SFG trajectory mode needs at least three frames for finite-difference velocities.")
     cell = configured_cell or frames[0].cell
     if cell is None:
         raise ValueError("No cell information was available. Set system.cell manually.")
 
-    dt_ps = float(sfg_cfg.get("dt_ps", _infer_dt_ps(frames)))
+    if "dt" in sfg_cfg:
+        dt_ps = units.input_time_ps(float(sfg_cfg["dt"]))
+    else:
+        dt_ps = float(sfg_cfg.get("dt_ps", _infer_dt_ps(frames)))
     if dt_ps <= 0:
         raise ValueError("sfg.dt_ps must be positive.")
-    lag_ps = float(sfg_cfg.get("lag_ps", dt_ps * min(200, max(1, len(frames) - 1))))
+    if "lag" in sfg_cfg:
+        lag_ps = units.input_time_ps(float(sfg_cfg["lag"]))
+    else:
+        lag_ps = float(sfg_cfg.get("lag_ps", dt_ps * min(200, max(1, len(frames) - 1))))
     max_lag = int(round(lag_ps / dt_ps))
     if max_lag < 1:
         raise ValueError("sfg.lag_ps must be at least one frame.")
@@ -57,7 +72,7 @@ def compute_ssvvcf_from_trajectory(config: dict[str, Any], output_prefix: Path) 
     pbc = _pbc_flags(sfg_cfg.get("pbc", [True, True, False]))
     hydrogen_symbol = str(sfg_cfg.get("hydrogen_symbol", "H"))
     oxygen_symbol = str(sfg_cfg.get("oxygen_symbol", "O"))
-    oh_cutoff = float(sfg_cfg.get("oh_cutoff", sfg_cfg.get("bond_cutoff", 1.25)))
+    oh_cutoff = units.input_length(float(sfg_cfg.get("oh_cutoff", sfg_cfg.get("bond_cutoff", 1.25))))
     neighbor_method = str(sfg_cfg.get("neighbor_method", "auto"))
     neighbor_workers = int(sfg_cfg.get("neighbor_workers", 1))
     oxygen_chunk_size = int(sfg_cfg.get("oxygen_chunk_size", 2048))
@@ -69,8 +84,8 @@ def compute_ssvvcf_from_trajectory(config: dict[str, Any], output_prefix: Path) 
 
     cf_path = Path(str(output_prefix) + ".dat")
     zref_path = Path(str(output_prefix) + "_zref.dat")
-    zrefs = _zref_series(frames, sfg_cfg, context)
-    _write_zrefs(zref_path, frames, zrefs)
+    zrefs = _zref_series(frames, sfg_internal, context)
+    _write_zrefs(zref_path, frames, units.output_length(zrefs), units.length_label)
 
     first = frames[0]
     oxygen_indices = element_indices(first, {oxygen_symbol}, context)
@@ -123,7 +138,7 @@ def compute_ssvvcf_from_trajectory(config: dict[str, Any], output_prefix: Path) 
 
             oxygen_position = positions[oxygen_index]
             zprime = float(oxygen_position[2] - zrefs[frame_index])
-            fwin = _window_factor(zprime, sfg_cfg)
+            fwin = _window_factor(zprime, sfg_internal)
             r_oh = _minimum_image(positions[hydrogen_index] - oxygen_position, cell=cell, pbc=pbc)
             r_norm = float(np.linalg.norm(r_oh))
             if r_norm <= 1e-12:
@@ -150,7 +165,7 @@ def compute_ssvvcf_from_trajectory(config: dict[str, Any], output_prefix: Path) 
     mask = counts > 0
     corr[mask] = sums[mask] / counts[mask]
     time_ps = np.arange(max_lag + 1, dtype=float) * dt_ps
-    write_cf(cf_path, time_ps, corr, counts)
+    write_cf(cf_path, units.output_time(time_ps), corr, counts, time_label=units.time_label)
     return SsvvcfResult(time_ps=time_ps, corr=corr, counts=counts, cf_path=cf_path, zref_path=zref_path, frames=len(frames))
 
 
@@ -267,10 +282,10 @@ def _zref_series(frames: list[TrajectoryFrame], sfg_cfg: dict[str, Any], context
     return np.full(len(frames), float(sfg_cfg.get("z_ref0", 0.0)), dtype=float)
 
 
-def _write_zrefs(path: Path, frames: list[TrajectoryFrame], zrefs: np.ndarray) -> None:
+def _write_zrefs(path: Path, frames: list[TrajectoryFrame], zrefs: np.ndarray, length_label: str = "A") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
-        handle.write("# frame_idx  step  zref\n")
+        handle.write(f"# frame_idx  step  zref_{length_label}\n")
         for frame, zref in zip(frames, zrefs):
             step = frame.step if frame.step is not None else frame.index
             handle.write(f"{frame.index} {step} {zref:.8f}\n")

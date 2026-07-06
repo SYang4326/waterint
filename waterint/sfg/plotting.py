@@ -28,6 +28,7 @@ def plot_spectrum(
     xmax: float = 4500.0,
     flip: bool = True,
     title: str = "",
+    frequency_label: str = "cm^-1",
     dpi: int = 220,
 ) -> None:
     import matplotlib
@@ -44,7 +45,7 @@ def plot_spectrum(
     ax.plot(freq_cm[mask], y[mask], linewidth=1.5, color="black")
     ax.axhline(0.0, linewidth=0.9, color="#777777")
     ax.set_xlim(xmin, xmax)
-    ax.set_xlabel("wavenumber (cm$^{-1}$)")
+    ax.set_xlabel(_frequency_axis_label(frequency_label))
     ax.set_ylabel("FT(CF) (a.u.)")
     if title:
         ax.set_title(title)
@@ -63,6 +64,7 @@ def plot_overlay(
     top_scale: float | None = 0.96,
     title: str = "",
     palette: str = "project",
+    frequency_label: str = "cm^-1",
     dpi: int = 220,
 ) -> None:
     import matplotlib
@@ -92,13 +94,13 @@ def plot_overlay(
 
     ax.axhline(0.0, color="#666666", linewidth=1.0)
     ax.set_xlim(xmin, xmax)
-    ax.set_xlabel("wavenumber (cm$^{-1}$)")
+    ax.set_xlabel(_frequency_axis_label(frequency_label))
     ax.set_ylabel("FT(CF) (a.u.)")
     if top_scale is not None:
         if top_scale == 0:
             raise ValueError("top_scale must be non-zero.")
         top = ax.secondary_xaxis("top", functions=(lambda x: x * top_scale, lambda x: x / top_scale))
-        top.set_xlabel(f"rescaled wavenumber ({top_scale:g}x, cm$^{{-1}}$)")
+        top.set_xlabel(f"rescaled {_frequency_axis_label(frequency_label)} ({top_scale:g}x)")
     ax.set_title(title or "SFG spectra from different bins")
     ax.legend(fontsize=8)
 
@@ -125,6 +127,12 @@ def format_bin_label(label: str) -> str:
     if re.fullmatch(r"-?\d+(?:\.\d+)?", left) and re.fullmatch(r"-?\d+(?:\.\d+)?", right):
         return f"z = {left}-{right}"
     return label
+
+
+def _frequency_axis_label(unit: str) -> str:
+    if unit == "THz":
+        return "frequency (THz)"
+    return "wavenumber (cm$^{-1}$)"
 
 
 def _normalize_bin_key(label: str) -> str:

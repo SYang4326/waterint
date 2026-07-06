@@ -9,6 +9,7 @@ from waterint.io.common import TrajectoryFrame
 from waterint.io.lammpstrj import read_lammpstrj
 from waterint.io.npz import read_npz
 from waterint.io.xyz import read_xyz
+from waterint.units import UnitSystem, convert_frame_to_internal_units
 
 
 AXIS_INDEX = {"x": 0, "y": 1, "z": 2}
@@ -23,23 +24,28 @@ def parse_axis(value: Any) -> tuple[str, int, float]:
     return axis_label, AXIS_INDEX[bare_axis], sign
 
 
-def parse_range(value: Any, *, name: str) -> tuple[float, float]:
+def parse_range(value: Any, *, name: str, units: UnitSystem | None = None) -> tuple[float, float]:
     if not isinstance(value, list) or len(value) != 2:
         raise ValueError(f"{name} must be [min, max].")
     range_min, range_max = float(value[0]), float(value[1])
     if not range_max > range_min:
         raise ValueError(f"{name} max must be larger than min.")
+    if units is not None:
+        range_min = units.input_length(range_min)
+        range_max = units.input_length(range_max)
     return range_min, range_max
 
 
-def parse_cell(value: Any) -> tuple[float, float, float] | None:
+def parse_cell(value: Any, units: UnitSystem | None = None) -> tuple[float, float, float] | None:
     if value is None or str(value).lower() == "auto":
         return None
     if not isinstance(value, list) or len(value) != 3:
-        raise ValueError("system.cell must be [Lx, Ly, Lz] in Angstrom or auto.")
+        raise ValueError("system.cell must be [Lx, Ly, Lz] or auto.")
     cell = tuple(float(v) for v in value)
     if any(v <= 0 for v in cell):
         raise ValueError("system.cell values must be positive.")
+    if units is not None:
+        cell = tuple(units.input_length(v) for v in cell)
     return cell
 
 
@@ -82,7 +88,7 @@ def element_mask(
     return np.isin(np.asarray(frame.symbols), list(species_set))
 
 
-def iter_frames(traj_path: Path, input_cfg: dict[str, Any]):
+def iter_frames(traj_path: Path, input_cfg: dict[str, Any], units: UnitSystem | None = None):
     fmt = str(input_cfg.get("format", "xyz")).lower()
     stride = int(input_cfg.get("stride", 1))
     max_frames_raw = input_cfg.get("max_frames", None)
@@ -97,13 +103,14 @@ def iter_frames(traj_path: Path, input_cfg: dict[str, Any]):
     if fmt == "xyz":
         frames = read_xyz(traj_path)
     elif fmt == "lammpstrj":
-        yield from read_lammpstrj(
+        for frame in read_lammpstrj(
             traj_path,
             type_map=input_cfg.get("type_map", {}),
             start_timestep=start_timestep,
             stride=stride,
             max_frames=max_frames,
-        )
+        ):
+            yield convert_frame_to_internal_units(frame, units) if units is not None else frame
         return
     elif fmt == "npz":
         frames = read_npz(traj_path, type_map=input_cfg.get("type_map", {}))
@@ -119,7 +126,7 @@ def iter_frames(traj_path: Path, input_cfg: dict[str, Any]):
                 continue
         if frame.index % stride != 0:
             continue
-        yield frame
+        yield convert_frame_to_internal_units(frame, units) if units is not None else frame
         yielded += 1
         if max_frames is not None and yielded >= max_frames:
             return

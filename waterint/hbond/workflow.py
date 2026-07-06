@@ -13,6 +13,7 @@ from waterint.common import element_indices, iter_frames, parse_cell, resolve_pa
 from waterint.config import require_mapping
 from waterint.hbond.plotting import plot_hbond_fractions
 from waterint.io.common import TrajectoryFrame
+from waterint.units import unit_system_from_config
 
 
 OXYGEN_SPECIES_ORDER = ("OH-", "H2O", "H3O+")
@@ -44,9 +45,18 @@ def run_hbond(config: dict[str, Any]) -> HbondResult:
     selection_cfg = require_mapping(config, "selection")
     hbond_cfg = require_mapping(config, "hbond")
     output_cfg = require_mapping(config, "output")
+    units = unit_system_from_config(config)
 
     traj_path = resolve_path(config, input_cfg["trajectory"])
-    configured_cell = parse_cell(system_cfg.get("cell", "auto"))
+    configured_cell = parse_cell(system_cfg.get("cell", "auto"), units)
+    selection_internal = dict(selection_cfg)
+    selection_internal["_oh_cutoff_internal"] = units.input_length(float(selection_cfg.get("oh_cutoff", 1.25)))
+    hbond_internal = dict(hbond_cfg)
+    hbond_internal["_oo_cutoff_internal"] = units.input_length(float(hbond_cfg.get("oo_cutoff", 3.5)))
+    h_acceptor_cutoff = _optional_float(hbond_cfg.get("h_acceptor_cutoff"))
+    hbond_internal["_h_acceptor_cutoff_internal"] = (
+        None if h_acceptor_cutoff is None else units.input_length(h_acceptor_cutoff)
+    )
     species_labels = _species_labels(selection_cfg)
     classes = _classes_by_species(hbond_cfg, species_labels)
 
@@ -57,7 +67,7 @@ def run_hbond(config: dict[str, Any]) -> HbondResult:
 
     cell = configured_cell
     frames = 0
-    for frame in iter_frames(traj_path, input_cfg):
+    for frame in iter_frames(traj_path, input_cfg, units):
         if cell is None:
             if frame.cell is None:
                 raise ValueError("system.cell is auto, but the trajectory did not provide cell information.")
@@ -65,8 +75,8 @@ def run_hbond(config: dict[str, Any]) -> HbondResult:
 
         frame_counts, frame_raw_counts, frame_samples = _frame_hbond_classes(
             frame=frame,
-            selection_cfg=selection_cfg,
-            hbond_cfg=hbond_cfg,
+            selection_cfg=selection_internal,
+            hbond_cfg=hbond_internal,
             classes=classes,
             selected_species=species_labels,
             context=context,
@@ -168,7 +178,7 @@ def _frame_hbond_classes(
         frame.positions,
         oxygen_symbol=oxygen_symbol,
         hydrogen_symbol=hydrogen_symbol,
-        oh_cutoff=float(selection_cfg.get("oh_cutoff", 1.25)),
+        oh_cutoff=float(selection_cfg.get("_oh_cutoff_internal", selection_cfg.get("oh_cutoff", 1.25))),
         neighbor_method=str(selection_cfg.get("neighbor_method", "auto")),
         neighbor_workers=int(selection_cfg.get("neighbor_workers", 1)),
         oxygen_chunk_size=int(selection_cfg.get("oxygen_chunk_size", 2048)),
@@ -222,9 +232,9 @@ def _find_hbonds(
     hbond_cfg: dict[str, Any],
     cell: tuple[float, float, float],
 ) -> list[tuple[int, int, int]]:
-    oo_cutoff = float(hbond_cfg.get("oo_cutoff", 3.5))
+    oo_cutoff = float(hbond_cfg.get("_oo_cutoff_internal", hbond_cfg.get("oo_cutoff", 3.5)))
     angle_min = float(hbond_cfg.get("dha_angle_min", 150.0))
-    h_acceptor_cutoff = _optional_float(hbond_cfg.get("h_acceptor_cutoff"))
+    h_acceptor_cutoff = hbond_cfg.get("_h_acceptor_cutoff_internal", _optional_float(hbond_cfg.get("h_acceptor_cutoff")))
     pbc = _pbc_flags(hbond_cfg.get("pbc", [True, True, True]))
     max_acceptors_per_hydrogen = bool(hbond_cfg.get("max_acceptors_per_hydrogen", True))
     if oo_cutoff <= 0:

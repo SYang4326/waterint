@@ -20,3 +20,6 @@ waterint = "waterint.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["waterint*"]
+
+[tool.setuptools.package-data]
+"waterint.ui" = ["static/*"]

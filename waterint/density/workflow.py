@@ -25,6 +25,10 @@ from waterint.common import (
 from waterint.config import require_mapping
 from waterint.io.common import TrajectoryFrame
 from waterint.density.plotting import plot_density_profile
+from waterint.units import (
+    UnitSystem,
+    unit_system_from_config,
+)
 
 
 OXYGEN_SPECIES_ORDER = ("O2-", "OH-", "H2O", "H3O+", "O_other")
@@ -50,26 +54,29 @@ class DensityResult:
 
 
 def run_density(config: dict[str, Any]) -> DensityResult:
-    input_cfg = require_mapping(config, "input")
-    system_cfg = require_mapping(config, "system")
+    input_cfg = require_mapping(config, "input")    # input_cfg is a dictionary containing the configuration for the input trajectory and format. 
+    system_cfg = require_mapping(config, "system")  
     selection_cfg = require_mapping(config, "selection")
     coord_cfg = require_mapping(config, "coordinate")
     output_cfg = require_mapping(config, "output")
+    units = unit_system_from_config(config)
 
-    fmt = str(input_cfg.get("format", "xyz")).lower()
+    fmt = str(input_cfg.get("format", "xyz")).lower()    # Detection of input file format from input_cfg. If not specified, defaults to "xyz". The format is converted to lowercase for consistency.
     if fmt not in {"xyz", "lammpstrj", "npz"}:
         raise ValueError("input.format must be xyz, lammpstrj, or npz.")
 
-    traj_path = resolve_path(config, input_cfg["trajectory"])
-    configured_cell = parse_cell(system_cfg.get("cell", "auto"))
+    traj_path = resolve_path(config, input_cfg["trajectory"])  # traj system path, cell information and axis of analysis
+    configured_cell = parse_cell(system_cfg.get("cell", "auto"), units)  # auto mode is the auto detection of the cell information from the dump file
     axis_label, axis, axis_sign = parse_axis(coord_cfg.get("axis", "z"))
 
-    range_min, range_max = parse_range(coord_cfg.get("range"), name="coordinate.range")
+    range_min, range_max = parse_range(coord_cfg.get("range"), name="coordinate.range", units=units)
     bins = int(coord_cfg.get("bins", 200))
     if bins <= 0:
         raise ValueError("coordinate.bins must be > 0.")
 
     profile_labels = _profile_labels(selection_cfg)
+    selection_internal = dict(selection_cfg)
+    selection_internal["_oh_cutoff_internal"] = units.input_length(float(selection_cfg.get("oh_cutoff", 1.25)))
     selection_context_data = selection_context(input_cfg)
 
     mode = str(coord_cfg.get("mode", "absolute"))
@@ -91,7 +98,7 @@ def run_density(config: dict[str, Any]) -> DensityResult:
     frames = 0
     selected_atoms_total = {label: 0 for label in profile_labels}
     cell = configured_cell
-    for frame in iter_frames(traj_path, input_cfg):
+    for frame in iter_frames(traj_path, input_cfg, units):
         if cell is None:
             if frame.cell is None:
                 raise ValueError("system.cell is auto, but the trajectory did not provide cell information.")
@@ -103,7 +110,7 @@ def run_density(config: dict[str, Any]) -> DensityResult:
         elif mode == "relative_to_slab":
             reference = slab_reference_value(frame, axis, reference_cfg, axis_sign, selection_context_data)
 
-        selected_indices_by_label = _selected_indices_by_label(frame, selection_cfg, selection_context_data)
+        selected_indices_by_label = _selected_indices_by_label(frame, selection_internal, selection_context_data)
         for label, selected_indices in selected_indices_by_label.items():
             selected_atoms_total[label] += int(selected_indices.size)
             values = axis_sign * (frame.positions[selected_indices, axis] - reference)
@@ -138,14 +145,19 @@ def run_density(config: dict[str, Any]) -> DensityResult:
     png_path = outdir / f"{prefix}.png" if bool(output_cfg.get("plot", True)) else None
     metadata_path = outdir / f"{prefix}_metadata.json"
 
-    _write_density_csv(csv_path, bin_centers, profiles, axis_label)
+    _write_density_csv(csv_path, bin_centers, profiles, axis_label, units, config.get("normalization", {}))
     if png_path is not None:
+        plot_x = units.output_length(bin_centers)
+        plot_y = {
+            label: {**profile, "density": _output_density_values(profile["density"], config.get("normalization", {}), units)}
+            for label, profile in profiles.items()
+        }
         plot_density_profile(
             path=png_path,
-            x=bin_centers,
-            y=profiles,
-            xlabel=f"{axis_label} coordinate (Angstrom)",
-            ylabel=_density_ylabel(config.get("normalization", {})),
+            x=plot_x,
+            y=plot_y,
+            xlabel=f"{axis_label} coordinate ({units.length_label})",
+            ylabel=_density_ylabel(config.get("normalization", {}), units),
             title=str(output_cfg.get("title", "Density profile")),
         )
     _write_metadata(
@@ -213,7 +225,7 @@ def _selected_indices_by_label(
             frame.positions,
             oxygen_symbol=str(selection_cfg.get("oxygen_symbol", "O")),
             hydrogen_symbol=str(selection_cfg.get("hydrogen_symbol", "H")),
-            oh_cutoff=float(selection_cfg.get("oh_cutoff", 1.25)),
+            oh_cutoff=float(selection_cfg.get("_oh_cutoff_internal", selection_cfg.get("oh_cutoff", 1.25))),
             neighbor_method=str(selection_cfg.get("neighbor_method", "auto")),
             neighbor_workers=int(selection_cfg.get("neighbor_workers", 1)),
             oxygen_chunk_size=int(selection_cfg.get("oxygen_chunk_size", 2048)),
@@ -290,15 +302,28 @@ def _profile_mass_amu(label: str, normalization_cfg: dict[str, Any]) -> float:
     return mass
 
 
-def _density_ylabel(normalization_cfg: Any) -> str:
+def _density_ylabel(normalization_cfg: Any, units: UnitSystem | None = None) -> str:
+    if units is None:
+        units = unit_system_from_config({})
     if isinstance(normalization_cfg, dict) and normalization_cfg.get("type") == "counts_per_frame":
         return "counts per frame"
     if isinstance(normalization_cfg, dict):
         norm_type = str(normalization_cfg.get("type", "number_density"))
         unit = str(normalization_cfg.get("unit", "")).lower()
         if norm_type == "mass_density" or unit in {"g_cm3", "g/cm3", "g/cm^3"}:
-            return "mass density (g/cm^3)"
-    return "number density (1/A^3)"
+            return f"mass density ({units.mass_density_label})"
+    return f"number density ({units.number_density_label})"
+
+
+def _output_density_values(values: np.ndarray, normalization_cfg: Any, units: UnitSystem) -> np.ndarray:
+    if isinstance(normalization_cfg, dict):
+        norm_type = str(normalization_cfg.get("type", "number_density"))
+        unit = str(normalization_cfg.get("unit", "")).lower()
+        if norm_type == "counts_per_frame":
+            return values
+        if norm_type == "mass_density" or unit in {"g_cm3", "g/cm3", "g/cm^3"}:
+            return units.output_mass_density(values)
+    return units.output_number_density(values)
 
 
 def _write_density_csv(
@@ -306,17 +331,25 @@ def _write_density_csv(
     bin_centers: np.ndarray,
     profiles: dict[str, dict[str, np.ndarray]],
     axis_name: str,
+    units: UnitSystem,
+    normalization_cfg: Any,
 ) -> None:
     with path.open("w", encoding="utf-8") as handle:
-        columns = [f"{axis_name}_center_A"]
+        length_suffix = units.length_label.replace("/", "_").replace("^", "")
+        columns = [f"{axis_name}_center_{length_suffix}"]
         for label in profiles:
             columns.extend([f"{label}_counts_per_frame", f"{label}_density"])
         handle.write(",".join(columns) + "\n")
-        for i, x in enumerate(bin_centers):
+        output_centers = units.output_length(bin_centers)
+        output_profiles = {
+            label: _output_density_values(profile["density"], normalization_cfg, units)
+            for label, profile in profiles.items()
+        }
+        for i, x in enumerate(output_centers):
             row = [f"{x:.10g}"]
-            for profile in profiles.values():
+            for label, profile in profiles.items():
                 row.append(f"{profile['counts_per_frame'][i]:.10g}")
-                row.append(f"{profile['density'][i]:.10g}")
+                row.append(f"{output_profiles[label][i]:.10g}")
             handle.write(",".join(row) + "\n")
 
 

@@ -1,12 +1,19 @@
 input:
-  trajectory: /Users/mapple/Desktop/LifeOS/20_projects/water-interface-analysis-site/test/dump.MgO_water_2x2_equil.last100ps.unique.waterint.npz
+  trajectory: ../shared/input/dump.MgO_water_2x2_equil.last100ps.unique.waterint.npz
   format: npz
   type_map:
     1: H
     2: Mg
     3: O
-  max_frames: 2000
+  max_frames: 200
   stride: 1
+
+units:
+  style: metal
+  output:
+    length: A
+    time: ps
+    frequency: cm^-1
 
 system:
   cell: auto
@@ -19,7 +26,7 @@ sfg:
   lag_ps: 0.995
   pbc: [true, true, false]
   reference:
-    species: ["Mg"]
+    species: [Mg]
     surface: max
   window:
     mode: 1
@@ -33,10 +40,10 @@ sfg:
   nzeros: 2000
 
 output:
-  directory: /Users/mapple/Desktop/LifeOS/20_projects/waterint/examples/mgo_sfg/output
-  prefix: mgo_100ps_sfg_test2000
+  directory: output
+  prefix: mgo_100ps_sfg_quick200
   plot: true
   xmin: 0.0
   xmax: 4500.0
   flip: true
-  title: "MgO-water SFG test, first 2000 frames"
+  title: "MgO-water SFG quick example, first 200 frames"

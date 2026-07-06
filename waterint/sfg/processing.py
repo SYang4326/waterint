@@ -27,11 +27,18 @@ def load_cf(path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return time_ps, corr, counts
 
 
-def write_cf(path: str | Path, time_ps: np.ndarray, corr: np.ndarray, counts: np.ndarray) -> None:
+def write_cf(
+    path: str | Path,
+    time_ps: np.ndarray,
+    corr: np.ndarray,
+    counts: np.ndarray,
+    *,
+    time_label: str = "ps",
+) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
-        handle.write("# time_ps  C_avg  count\n")
+        handle.write(f"# time_{time_label}  C_avg  count\n")
         for time_value, corr_value, count in zip(time_ps, corr, counts):
             handle.write(f"{time_value:12.8f} {corr_value: .12e} {int(count)}\n")
 
@@ -93,10 +100,11 @@ def compute_ft(
     return freq, signal
 
 
-def write_ft(path: str | Path, freq_cm: np.ndarray, signal: np.ndarray) -> None:
+def write_ft(path: str | Path, freq_cm: np.ndarray, signal: np.ndarray, *, frequency_label: str = "cm^-1") -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    np.savetxt(path, np.column_stack((freq_cm, signal)), fmt="%.18e")
+    header = f"frequency_{frequency_label} signal"
+    np.savetxt(path, np.column_stack((freq_cm, signal)), fmt="%.18e", header=header)
 
 
 def load_ft(path: str | Path) -> tuple[np.ndarray, np.ndarray]:

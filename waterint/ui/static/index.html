@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WaterInt UI</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">W</div>
+          <div>
+            <h1>WaterInt</h1>
+            <p>Local trajectory analysis UI</p>
+          </div>
+        </div>
+
+        <section class="panel">
+          <h2>Analysis</h2>
+          <label>
+            Module
+            <select id="module">
+              <option value="density">Density profile</option>
+              <option value="oh-orientation">OH orientation</option>
+              <option value="hbond">H-bond topology</option>
+              <option value="sfg">SFG spectrum</option>
+            </select>
+          </label>
+          <button id="exampleButton" class="wide ghost" type="button">Load compact example</button>
+          <label>
+            Base directory
+            <input id="baseDir" placeholder="/path/to/project" />
+          </label>
+          <label>
+            Trajectory path
+            <input id="trajectory" placeholder="examples/density_xyz/input/input.xyz" />
+          </label>
+          <div class="row">
+            <label>
+              Format
+              <select id="format">
+                <option value="xyz">xyz</option>
+                <option value="lammpstrj">lammpstrj</option>
+                <option value="npz">npz</option>
+              </select>
+            </label>
+            <label>
+              Max frames
+              <input id="maxFrames" value="all" />
+            </label>
+          </div>
+          <label>
+            System cell
+            <input id="systemCell" value="auto" />
+          </label>
+          <label>
+            Type map
+            <textarea id="typeMap" rows="3">1: H
+2: Mg
+3: O</textarea>
+          </label>
+        </section>
+
+        <section class="panel">
+          <h2>Units</h2>
+          <div class="row">
+            <label>
+              Style
+              <select id="unitStyle">
+                <option value="metal">metal</option>
+                <option value="real">real</option>
+                <option value="si">si</option>
+                <option value="cgs">cgs</option>
+                <option value="electron">electron</option>
+                <option value="micro">micro</option>
+                <option value="nano">nano</option>
+              </select>
+            </label>
+            <label>
+              Length output
+              <select id="outLength">
+                <option value="A">A</option>
+                <option value="nm">nm</option>
+                <option value="m">m</option>
+                <option value="cm">cm</option>
+                <option value="um">um</option>
+                <option value="bohr">bohr</option>
+              </select>
+            </label>
+          </div>
+          <div class="row">
+            <label>
+              Mass density
+              <select id="outMassDensity">
+                <option value="g/cm^3">g/cm^3</option>
+                <option value="kg/m^3">kg/m^3</option>
+                <option value="amu/A^3">amu/A^3</option>
+              </select>
+            </label>
+            <label>
+              Frequency
+              <select id="outFrequency">
+                <option value="cm^-1">cm^-1</option>
+                <option value="THz">THz</option>
+              </select>
+            </label>
+          </div>
+        </section>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <h2 id="moduleTitle">Density profile</h2>
+            <p id="moduleSubtitle">Build a config, run locally, and inspect generated outputs.</p>
+          </div>
+          <button id="runButton" class="primary">Run analysis</button>
+        </header>
+
+        <section class="grid">
+          <div class="card">
+            <div class="card-head">
+              <h3>Module parameters</h3>
+              <button id="resetButton" class="ghost">Reset</button>
+            </div>
+            <div id="moduleFields"></div>
+          </div>
+
+          <div class="card yaml-card">
+            <div class="card-head">
+              <h3>Config preview</h3>
+              <button id="refreshYaml" class="ghost">Regenerate</button>
+            </div>
+            <textarea id="yamlPreview" spellcheck="false"></textarea>
+          </div>
+        </section>
+
+        <section class="card results-card">
+          <div class="card-head">
+            <h3>Results</h3>
+            <span id="statusBadge" class="badge idle">Idle</span>
+          </div>
+          <p id="statusText" class="muted">No job has been submitted yet.</p>
+          <div id="artifactGrid" class="artifacts"></div>
+        </section>
+      </main>
+    </div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

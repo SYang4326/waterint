@@ -23,6 +23,7 @@ from waterint.common import (
     slab_reference_value,
 )
 from waterint.config import require_mapping
+from waterint.units import UnitSystem, unit_system_from_config
 
 
 OXYGEN_SPECIES_ORDER = ("OH-", "H2O", "H3O+")
@@ -48,11 +49,12 @@ def run_angle_z(config: dict[str, Any]) -> AngleZResult:
     coord_cfg = require_mapping(config, "coordinate")
     angle_cfg = require_mapping(config, "angle")
     output_cfg = require_mapping(config, "output")
+    units = unit_system_from_config(config)
 
     traj_path = resolve_path(config, input_cfg["trajectory"])
-    configured_cell = parse_cell(system_cfg.get("cell", "auto"))
+    configured_cell = parse_cell(system_cfg.get("cell", "auto"), units)
     axis_label, axis, axis_sign = parse_axis(coord_cfg.get("axis", "z"))
-    z_min, z_max = parse_range(coord_cfg.get("range"), name="coordinate.range")
+    z_min, z_max = parse_range(coord_cfg.get("range"), name="coordinate.range", units=units)
     z_bins = int(coord_cfg.get("bins", 200))
     if z_bins <= 0:
         raise ValueError("coordinate.bins must be > 0.")
@@ -64,6 +66,7 @@ def run_angle_z(config: dict[str, Any]) -> AngleZResult:
     vector_mode = str(angle_cfg.get("vector_mode", "oh_bond")).lower()
     if vector_mode not in {"oh_bond", "oh_bisector", "dipole"}:
         raise ValueError("angle.vector_mode must be oh_bond, oh_bisector, or dipole.")
+    oh_cutoff = units.input_length(float(selection_cfg.get("oh_cutoff", 1.25)))
 
     species_labels = _species_labels(selection_cfg)
     z_edges = np.linspace(z_min, z_max, z_bins + 1)
@@ -84,7 +87,7 @@ def run_angle_z(config: dict[str, Any]) -> AngleZResult:
     context = selection_context(input_cfg)
     cell = configured_cell
     frames = 0
-    for frame in iter_frames(traj_path, input_cfg):
+    for frame in iter_frames(traj_path, input_cfg, units):
         if cell is None:
             if frame.cell is None:
                 raise ValueError("system.cell is auto, but the trajectory did not provide cell information.")
@@ -104,7 +107,7 @@ def run_angle_z(config: dict[str, Any]) -> AngleZResult:
                 frame.positions,
                 oxygen_symbol=str(selection_cfg.get("oxygen_symbol", "O")),
                 hydrogen_symbol=str(selection_cfg.get("hydrogen_symbol", "H")),
-                oh_cutoff=float(selection_cfg.get("oh_cutoff", 1.25)),
+                oh_cutoff=oh_cutoff,
                 neighbor_method=str(selection_cfg.get("neighbor_method", "auto")),
                 neighbor_workers=int(selection_cfg.get("neighbor_workers", 1)),
                 oxygen_chunk_size=int(selection_cfg.get("oxygen_chunk_size", 2048)),
@@ -133,7 +136,7 @@ def run_angle_z(config: dict[str, Any]) -> AngleZResult:
                 frame.positions,
                 oxygen_symbol=str(selection_cfg.get("oxygen_symbol", "O")),
                 hydrogen_symbol=str(selection_cfg.get("hydrogen_symbol", "H")),
-                oh_cutoff=float(selection_cfg.get("oh_cutoff", 1.25)),
+                oh_cutoff=oh_cutoff,
                 neighbor_method=str(selection_cfg.get("neighbor_method", "auto")),
                 neighbor_workers=int(selection_cfg.get("neighbor_workers", 1)),
                 oxygen_chunk_size=int(selection_cfg.get("oxygen_chunk_size", 2048)),
@@ -189,18 +192,20 @@ def run_angle_z(config: dict[str, Any]) -> AngleZResult:
         safe_label = _safe_label(label)
         csv_path = outdir / f"{prefix}_{safe_label}.csv"
         csv_paths[label] = csv_path
-        _write_hist_csv(csv_path, z_centers, angle_centers, hist, axis_label)
+        output_z_centers = units.output_length(z_centers)
+        output_hist = _output_histogram_values(hist, normalization_cfg, units)
+        _write_hist_csv(csv_path, output_z_centers, angle_centers, output_hist, axis_label, units)
         if plot_enabled:
             png_path = outdir / f"{prefix}_{safe_label}.png"
             png_paths[label] = png_path
             plot_angle_z_histogram(
                 path=png_path,
-                z_centers=z_centers,
+                z_centers=output_z_centers,
                 angle_centers=angle_centers,
-                hist=hist,
+                hist=output_hist,
                 title=f"{label}: {output_cfg.get('title', f'{_vector_label(vector_mode)} angle vs {axis_label}')}",
-                z_label=str(output_cfg.get("z_label", f"{axis_label} coordinate (Angstrom)")),
-                value_label=_value_label(normalization_cfg, vector_mode=vector_mode),
+                z_label=str(output_cfg.get("z_label", f"{axis_label} coordinate ({units.length_label})")),
+                value_label=_value_label(normalization_cfg, vector_mode=vector_mode, units=units),
                 angle_label=str(output_cfg.get("angle_label", _plot_angle_label(vector_mode))),
                 log=bool(output_cfg.get("log", False)),
                 cmap=str(output_cfg.get("cmap", "turbo")),
@@ -356,10 +361,18 @@ def _normalize_histogram(
     return counts_per_frame / volume_angle
 
 
-def _value_label(normalization_cfg: Any, *, vector_mode: str = "oh_bond") -> str:
+def _output_histogram_values(hist: np.ndarray, normalization_cfg: Any, units: UnitSystem) -> np.ndarray:
+    if isinstance(normalization_cfg, dict) and str(normalization_cfg.get("type", "counts_per_frame")) == "number_density":
+        return np.asarray(hist, dtype=float) * units.output_length_to_angstrom**3
+    return hist
+
+
+def _value_label(normalization_cfg: Any, *, vector_mode: str = "oh_bond", units: UnitSystem | None = None) -> str:
+    if units is None:
+        units = unit_system_from_config({})
     sample_name = "O-H bond" if vector_mode == "oh_bond" else "molecular vector"
     if isinstance(normalization_cfg, dict) and str(normalization_cfg.get("type", "counts_per_frame")) == "number_density":
-        return f"{sample_name} density (1/A^3/degree)"
+        return f"{sample_name} density ({units.number_density_label}/degree)"
     return f"{sample_name}s per frame"
 
 
@@ -391,9 +404,11 @@ def _write_hist_csv(
     angle_centers: np.ndarray,
     hist: np.ndarray,
     axis_label: str,
+    units: UnitSystem,
 ) -> None:
+    length_suffix = units.length_label.replace("/", "_").replace("^", "")
     with path.open("w", encoding="utf-8") as handle:
-        handle.write(f"{axis_label}_center_A,angle_center_deg,value\n")
+        handle.write(f"{axis_label}_center_{length_suffix},angle_center_deg,value\n")
         for i, z_value in enumerate(z_centers):
             for j, angle_value in enumerate(angle_centers):
                 handle.write(f"{z_value:.10g},{angle_value:.10g},{hist[i, j]:.10g}\n")

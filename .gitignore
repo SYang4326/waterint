@@ -8,6 +8,6 @@ build/
 dist/
 *.egg-info/
 examples/**/output*/
-v0/example/shared/input/*.npz
+v*/example/shared/input/*.npz
 _local_archive/
 .DS_Store

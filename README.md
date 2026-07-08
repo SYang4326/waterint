@@ -73,7 +73,8 @@ Coordinate references can be recomputed from selected atoms, such as a slab surf
 
 ## Version Notes
 
-- Active version line: `v0`
+- Active editable-install version line: `v0`
+- Experimental architecture version line: [`v0.2`](v0.2/README.md)
 - Last reorganized: 2026-07-06
 - Python package import: `waterint`
 - CLI command: `waterint`

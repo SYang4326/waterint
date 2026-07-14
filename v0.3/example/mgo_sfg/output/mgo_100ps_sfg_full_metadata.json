@@ -2,17 +2,17 @@
   "analysis_name": "sfg",
   "package": "waterint",
   "mode": "trajectory",
-  "config_file": "v0.3/example/mgo_sfg/config_100ps_npz.yaml",
+  "config_file": "v0.3/example/mgo_sfg/config_100ps_npz_full.yaml",
   "outputs": {
     "cf": {
-      "ssvvcf": "v0.3/example/mgo_sfg/output/mgo_100ps_sfg_quick200.dat",
-      "zref": "v0.3/example/mgo_sfg/output/mgo_100ps_sfg_quick200_zref.dat"
+      "ssvvcf": "v0.3/example/mgo_sfg/output/mgo_100ps_sfg_full.dat",
+      "zref": "v0.3/example/mgo_sfg/output/mgo_100ps_sfg_full_zref.dat"
     },
     "ft": {
-      "spectrum": "v0.3/example/mgo_sfg/output/mgo_100ps_sfg_quick200_FT.dat"
+      "spectrum": "v0.3/example/mgo_sfg/output/mgo_100ps_sfg_full_FT.dat"
     },
     "png": {
-      "spectrum": "v0.3/example/mgo_sfg/output/mgo_100ps_sfg_quick200_FT.png"
+      "spectrum": "v0.3/example/mgo_sfg/output/mgo_100ps_sfg_full_FT.png"
     }
   },
   "config": {
@@ -24,7 +24,7 @@
         "2": "Mg",
         "3": "O"
       },
-      "max_frames": 200,
+      "max_frames": "all",
       "stride": 1
     },
     "system": {
@@ -35,6 +35,8 @@
       "backend": "auto",
       "hydrogen_symbol": "H",
       "oxygen_symbol": "O",
+      "oh_cutoff": 1.25,
+      "duplicate_hydrogen_policy": "nearest",
       "dt_ps": 0.005,
       "lag_ps": 0.995,
       "pbc": [
@@ -62,12 +64,12 @@
     },
     "output": {
       "directory": "output",
-      "prefix": "mgo_100ps_sfg_quick200",
+      "prefix": "mgo_100ps_sfg_full",
       "plot": true,
       "xmin": 0.0,
       "xmax": 4500.0,
       "flip": true,
-      "title": "MgO-water SFG quick example, first 200 frames"
+      "title": "MgO-water SFG, 100 ps"
     }
   }
 }

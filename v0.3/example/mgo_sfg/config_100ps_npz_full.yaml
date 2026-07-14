@@ -13,6 +13,7 @@ system:
 
 sfg:
   mode: trajectory
+  backend: auto
   hydrogen_symbol: H
   oxygen_symbol: O
   oh_cutoff: 1.25

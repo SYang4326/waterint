@@ -8,6 +8,8 @@ import math
 
 import numpy as np
 
+from waterint._02_computation._native import accumulate_oh_orientation_from_neighbors, hydrogen_neighbor_matrix
+
 
 OXYGEN_SPECIES_ORDER = ("OH-", "H2O", "H3O+")
 
@@ -16,6 +18,7 @@ OXYGEN_SPECIES_ORDER = ("OH-", "H2O", "H3O+")
 class OhOrientationState:
     z_edges: np.ndarray
     angle_edges: np.ndarray
+    counts_buffer: np.ndarray
     counts_by_species: dict[str, np.ndarray]
     bond_counts_total: dict[str, int]
     sample_counts_total: dict[str, int]
@@ -49,13 +52,67 @@ def species_labels(selection_cfg: dict[str, Any]) -> list[str]:
 
 
 def new_oh_orientation_state(labels: list[str], z_edges: np.ndarray, angle_edges: np.ndarray) -> OhOrientationState:
+    counts_buffer = np.zeros((len(OXYGEN_SPECIES_ORDER), len(z_edges) - 1, len(angle_edges) - 1), dtype=float)
+    label_index = {label: index for index, label in enumerate(OXYGEN_SPECIES_ORDER)}
     return OhOrientationState(
         z_edges=z_edges,
         angle_edges=angle_edges,
-        counts_by_species={label: np.zeros((len(z_edges) - 1, len(angle_edges) - 1), dtype=float) for label in labels},
+        counts_buffer=counts_buffer,
+        counts_by_species={label: counts_buffer[label_index[label]] for label in labels},
         bond_counts_total={label: 0 for label in labels},
         sample_counts_total={label: 0 for label in labels},
     )
+
+
+def build_oh_neighbor_matrix_cpp(
+    *,
+    oxygen_positions: np.ndarray,
+    hydrogen_positions: np.ndarray,
+    cutoff: float,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    return hydrogen_neighbor_matrix(
+        oxygen_positions,
+        hydrogen_positions,
+        cutoff=cutoff,
+    )
+
+
+def accumulate_oh_orientation_cpp(
+    state: OhOrientationState,
+    *,
+    oxygen_positions: np.ndarray,
+    hydrogen_positions: np.ndarray,
+    neighbor_counts: np.ndarray,
+    neighbor_matrix: np.ndarray,
+    vector_mode: str,
+    axis: int,
+    axis_sign: float,
+    reference: float,
+    angle_axis_sign: float,
+) -> bool:
+    result = accumulate_oh_orientation_from_neighbors(
+        oxygen_positions,
+        hydrogen_positions,
+        neighbor_counts,
+        neighbor_matrix,
+        vector_mode=vector_mode,
+        axis=axis,
+        axis_sign=axis_sign,
+        reference=reference,
+        angle_axis_sign=angle_axis_sign,
+        z_edges=state.z_edges,
+        angle_edges=state.angle_edges,
+        histograms=state.counts_buffer,
+    )
+    if result is None:
+        return False
+    bond_counts, sample_counts = result
+    for index, label in enumerate(OXYGEN_SPECIES_ORDER):
+        if label not in state.bond_counts_total:
+            continue
+        state.bond_counts_total[label] += int(bond_counts[index])
+        state.sample_counts_total[label] += int(sample_counts[index])
+    return True
 
 
 def accumulate_angle_samples(

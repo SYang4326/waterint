@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,7 @@ import numpy as np
 from scipy.fftpack import dct
 
 from waterint.chemistry import oxygen_hydrogen_neighbors_by_species
+from waterint._02_computation._native import sfg_ssvvcf
 from waterint._00_io.common import TrajectoryFrame
 from waterint._01_core.selection import SelectionContext, element_indices, element_mask
 
@@ -165,6 +167,8 @@ def compute_ssvvcf_from_frames(
     sfg_cfg: dict[str, Any],
     context: SelectionContext,
 ) -> SsvvcfResult:
+    """Compute trajectory-mode ssVVCF with a Python or optional C++ backend."""
+
     if len(frames) < 3:
         raise ValueError("SFG trajectory mode needs at least three frames for finite-difference velocities.")
 
@@ -188,6 +192,9 @@ def compute_ssvvcf_from_frames(
         raise ValueError("sfg.mu_mode must be full or stretch.")
     symmetrize = bool(sfg_cfg.get("symmetrize", True))
     flip_sign = bool(sfg_cfg.get("flip_sign", False))
+    backend = str(sfg_cfg.get("backend", "auto")).lower()
+    if backend not in {"auto", "python", "cpp"}:
+        raise ValueError("sfg.backend must be auto, python, or cpp.")
 
     zrefs = zref_series(frames, sfg_cfg, context)
     first = frames[0]
@@ -196,79 +203,292 @@ def compute_ssvvcf_from_frames(
     if oxygen_indices.size == 0 or hydrogen_indices.size == 0:
         raise ValueError("SFG trajectory mode could not find O/H atoms. Check input.type_map and sfg symbols.")
 
+    fixed_topology = selection_is_fixed(frames, first)
+    if backend == "cpp" and not fixed_topology:
+        raise ValueError("sfg.backend: cpp requires fixed atom types/order across trajectory frames.")
+    if backend in {"auto", "cpp"} and fixed_topology:
+        positions = contiguous_frame_positions(frames)
+        native_result = sfg_ssvvcf(
+            positions,
+            oxygen_indices,
+            hydrogen_indices,
+            zrefs,
+            dt_ps=dt_ps,
+            max_lag=max_lag,
+            oh_cutoff=oh_cutoff,
+            cell=cell,
+            pbc=pbc,
+            mu_mode=mu_mode,
+            symmetrize=symmetrize,
+            flip_sign=flip_sign,
+            duplicate_policy=str(sfg_cfg.get("duplicate_hydrogen_policy", "nearest")),
+            window=sfg_cfg.get("window"),
+        )
+        if native_result is not None:
+            sums, counts, _stage_seconds = native_result
+            corr = np.zeros_like(sums)
+            mask = counts > 0
+            corr[mask] = sums[mask] / counts[mask]
+            time_ps = np.arange(max_lag + 1, dtype=float) * dt_ps
+            return SsvvcfResult(time_ps=time_ps, corr=corr, counts=counts, zrefs=zrefs, frames=len(frames))
+        if backend == "cpp":
+            raise RuntimeError("C++ SFG backend is not available.")
+
+    velocities = finite_difference_velocities(frames, dt_ps=dt_ps, cell=cell, pbc=pbc)
+    segments = build_sfg_segments_python(
+        frames,
+        velocities=velocities,
+        zrefs=zrefs,
+        cell=cell,
+        sfg_cfg=sfg_cfg,
+        context=context,
+        pbc=pbc,
+        oxygen_symbol=oxygen_symbol,
+        hydrogen_symbol=hydrogen_symbol,
+        oh_cutoff=oh_cutoff,
+        neighbor_method=neighbor_method,
+        neighbor_workers=neighbor_workers,
+        oxygen_chunk_size=oxygen_chunk_size,
+        mu_mode=mu_mode,
+        flip_sign=flip_sign,
+    )
+    sums, counts = correlate_sfg_segments_python(
+        segments,
+        max_lag=max_lag,
+        symmetrize=symmetrize,
+    )
+    corr = np.zeros_like(sums)
+    mask = counts > 0
+    corr[mask] = sums[mask] / counts[mask]
+    time_ps = np.arange(max_lag + 1, dtype=float) * dt_ps
+    return SsvvcfResult(time_ps=time_ps, corr=corr, counts=counts, zrefs=zrefs, frames=len(frames))
+
+
+def build_sfg_segments_python(
+    frames: list[TrajectoryFrame],
+    *,
+    velocities: np.ndarray,
+    zrefs: np.ndarray,
+    cell: tuple[float, float, float],
+    sfg_cfg: dict[str, Any],
+    context: SelectionContext,
+    pbc: tuple[bool, bool, bool],
+    oxygen_symbol: str,
+    hydrogen_symbol: str,
+    oh_cutoff: float,
+    neighbor_method: str,
+    neighbor_workers: int,
+    oxygen_chunk_size: int,
+    mu_mode: str,
+    flip_sign: bool,
+    stage_timings: dict[str, float] | None = None,
+) -> list[_Segment]:
+    """Assign O-H bonds and build continuous per-bond signal segments."""
+
     active_oxygen_by_h: dict[int, int] = {}
     active_segments: dict[int, _Segment] = {}
     segments: list[_Segment] = []
-
-    velocities = finite_difference_velocities(frames, dt_ps=dt_ps, cell=cell, pbc=pbc)
     for frame_index, frame in enumerate(frames):
-        positions = frame.positions
-        frame_oxygen_indices = element_indices(frame, {oxygen_symbol}, context)
-        frame_hydrogen_indices = element_indices(frame, {hydrogen_symbol}, context)
-        neighbors_by_species = oxygen_hydrogen_neighbors_by_species(
-            frame.symbols,
-            positions,
+        assignment_start = time.perf_counter() if stage_timings is not None else 0.0
+        assigned = assign_sfg_hydrogens_for_frame(
+            frame,
+            cell=cell,
+            pbc=pbc,
+            context=context,
             oxygen_symbol=oxygen_symbol,
             hydrogen_symbol=hydrogen_symbol,
             oh_cutoff=oh_cutoff,
             neighbor_method=neighbor_method,
             neighbor_workers=neighbor_workers,
             oxygen_chunk_size=oxygen_chunk_size,
-            oxygen_indices=frame_oxygen_indices,
-            hydrogen_indices=frame_hydrogen_indices,
-            cell=cell,
-            pbc=pbc,
-        )
-        assigned = assigned_hydrogens_from_neighbors(
-            neighbors_by_species,
-            positions=positions,
-            cell=cell,
-            pbc=pbc,
             duplicate_policy=str(sfg_cfg.get("duplicate_hydrogen_policy", "nearest")),
         )
-        missing_hydrogens = set(active_segments) - set(assigned)
-        for hydrogen_index in missing_hydrogens:
-            segments.append(active_segments.pop(hydrogen_index))
-            active_oxygen_by_h.pop(hydrogen_index, None)
-
-        for hydrogen_index, oxygen_index in assigned.items():
-            previous_oxygen = active_oxygen_by_h.get(hydrogen_index)
-            if previous_oxygen != oxygen_index:
-                if hydrogen_index in active_segments:
-                    segments.append(active_segments.pop(hydrogen_index))
-                active_oxygen_by_h[hydrogen_index] = oxygen_index
-                active_segments[hydrogen_index] = _Segment(hydrogen_index, oxygen_index)
-
-            oxygen_position = positions[oxygen_index]
-            zprime = float(oxygen_position[2] - zrefs[frame_index])
-            fwin = window_factor(zprime, sfg_cfg)
-            r_oh = minimum_image(positions[hydrogen_index] - oxygen_position, cell=cell, pbc=pbc)
-            r_norm = float(np.linalg.norm(r_oh))
-            if r_norm <= 1e-12:
-                continue
-            vrel = velocities[frame_index, hydrogen_index] - velocities[frame_index, oxygen_index]
-            stretch = float(np.dot(vrel, r_oh) / r_norm)
-            cos_theta = float(r_oh[2] / r_norm)
-            mu_stretch = fwin * stretch * cos_theta
-            mu_full = fwin * float(vrel[2])
-            mu = mu_stretch if mu_mode == "stretch" else mu_full
-            if flip_sign:
-                mu *= -1.0
-            segment = active_segments[hydrogen_index]
-            segment.mu.append(float(mu))
-            segment.stretch.append(stretch)
+        if stage_timings is not None:
+            stage_timings["O-H assignment"] += time.perf_counter() - assignment_start
+            signal_start = time.perf_counter()
+        append_sfg_frame_signals(
+            frame_index,
+            frame,
+            assigned=assigned,
+            velocities=velocities,
+            zrefs=zrefs,
+            cell=cell,
+            pbc=pbc,
+            sfg_cfg=sfg_cfg,
+            mu_mode=mu_mode,
+            flip_sign=flip_sign,
+            active_oxygen_by_h=active_oxygen_by_h,
+            active_segments=active_segments,
+            segments=segments,
+        )
+        if stage_timings is not None:
+            stage_timings["Segment signal construction"] += time.perf_counter() - signal_start
 
     segments.extend(active_segments.values())
+    return segments
+
+
+def assign_sfg_hydrogens_for_frame(
+    frame: TrajectoryFrame,
+    *,
+    cell: tuple[float, float, float],
+    pbc: tuple[bool, bool, bool],
+    context: SelectionContext,
+    oxygen_symbol: str,
+    hydrogen_symbol: str,
+    oh_cutoff: float,
+    neighbor_method: str,
+    neighbor_workers: int,
+    oxygen_chunk_size: int,
+    duplicate_policy: str,
+) -> dict[int, int]:
+    """Assign each in-cutoff hydrogen to one oxygen for a trajectory frame."""
+
+    oxygen_indices = element_indices(frame, {oxygen_symbol}, context)
+    hydrogen_indices = element_indices(frame, {hydrogen_symbol}, context)
+    neighbors_by_species = oxygen_hydrogen_neighbors_by_species(
+        frame.symbols,
+        frame.positions,
+        oxygen_symbol=oxygen_symbol,
+        hydrogen_symbol=hydrogen_symbol,
+        oh_cutoff=oh_cutoff,
+        neighbor_method=neighbor_method,
+        neighbor_workers=neighbor_workers,
+        oxygen_chunk_size=oxygen_chunk_size,
+        oxygen_indices=oxygen_indices,
+        hydrogen_indices=hydrogen_indices,
+        cell=cell,
+        pbc=pbc,
+    )
+    return assigned_hydrogens_from_neighbors(
+        neighbors_by_species,
+        positions=frame.positions,
+        cell=cell,
+        pbc=pbc,
+        duplicate_policy=duplicate_policy,
+    )
+
+
+def append_sfg_frame_signals(
+    frame_index: int,
+    frame: TrajectoryFrame,
+    *,
+    assigned: dict[int, int],
+    velocities: np.ndarray,
+    zrefs: np.ndarray,
+    cell: tuple[float, float, float],
+    pbc: tuple[bool, bool, bool],
+    sfg_cfg: dict[str, Any],
+    mu_mode: str,
+    flip_sign: bool,
+    active_oxygen_by_h: dict[int, int],
+    active_segments: dict[int, _Segment],
+    segments: list[_Segment],
+) -> None:
+    """Update O-H segments and append this frame's mu/stretch signals."""
+
+    missing_hydrogens = set(active_segments) - set(assigned)
+    for hydrogen_index in missing_hydrogens:
+        segments.append(active_segments.pop(hydrogen_index))
+        active_oxygen_by_h.pop(hydrogen_index, None)
+
+    positions = frame.positions
+    for hydrogen_index, oxygen_index in assigned.items():
+        previous_oxygen = active_oxygen_by_h.get(hydrogen_index)
+        if previous_oxygen != oxygen_index:
+            if hydrogen_index in active_segments:
+                segments.append(active_segments.pop(hydrogen_index))
+            active_oxygen_by_h[hydrogen_index] = oxygen_index
+            active_segments[hydrogen_index] = _Segment(hydrogen_index, oxygen_index)
+
+        oxygen_position = positions[oxygen_index]
+        zprime = float(oxygen_position[2] - zrefs[frame_index])
+        fwin = window_factor(zprime, sfg_cfg)
+        r_oh = minimum_image(positions[hydrogen_index] - oxygen_position, cell=cell, pbc=pbc)
+        r_norm = float(np.linalg.norm(r_oh))
+        if r_norm <= 1e-12:
+            continue
+        vrel = velocities[frame_index, hydrogen_index] - velocities[frame_index, oxygen_index]
+        stretch = float(np.dot(vrel, r_oh) / r_norm)
+        cos_theta = float(r_oh[2] / r_norm)
+        mu_stretch = fwin * stretch * cos_theta
+        mu_full = fwin * float(vrel[2])
+        mu = mu_stretch if mu_mode == "stretch" else mu_full
+        if flip_sign:
+            mu *= -1.0
+        segment = active_segments[hydrogen_index]
+        segment.mu.append(float(mu))
+        segment.stretch.append(stretch)
+
+
+def correlate_sfg_segments_python(
+    segments: list[_Segment],
+    *,
+    max_lag: int,
+    symmetrize: bool,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Accumulate lag correlations for all continuous O-H segments."""
+
     sums = np.zeros(max_lag + 1, dtype=float)
     counts = np.zeros(max_lag + 1, dtype=np.int64)
     for segment in segments:
         accumulate_segment(segment, sums=sums, counts=counts, max_lag=max_lag, symmetrize=symmetrize)
+    return sums, counts
 
-    corr = np.zeros_like(sums)
-    mask = counts > 0
-    corr[mask] = sums[mask] / counts[mask]
-    time_ps = np.arange(max_lag + 1, dtype=float) * dt_ps
-    return SsvvcfResult(time_ps=time_ps, corr=corr, counts=counts, zrefs=zrefs, frames=len(frames))
+
+def contiguous_frame_positions(frames: list[TrajectoryFrame]) -> np.ndarray:
+    """Reuse a contiguous NPZ position block or stack other frame sources.
+
+    NPZ frames are views into one loaded ``(frames, atoms, 3)`` array. Reusing
+    that block avoids a second full-trajectory allocation before entering C++.
+    """
+
+    first = np.asarray(frames[0].positions)
+    root = first.base
+    if isinstance(root, np.ndarray) and root.ndim == 3 and root.shape[1:] == first.shape:
+        indices = [int(frame.index) for frame in frames]
+        if indices == list(range(indices[0], indices[0] + len(indices))):
+            view = root[indices[0] : indices[0] + len(indices)]
+            if (
+                view.dtype == np.float64
+                and view.flags.c_contiguous
+                and np.shares_memory(view[0], frames[0].positions)
+                and np.shares_memory(view[-1], frames[-1].positions)
+            ):
+                return view
+    return np.ascontiguousarray(np.stack([frame.positions for frame in frames]), dtype=np.float64)
+
+
+def selection_is_fixed(frames: list[TrajectoryFrame], first: TrajectoryFrame) -> bool:
+    """Check the fixed atom-type/order contract required by the C++ kernel."""
+
+    position_shape = np.asarray(first.positions).shape
+    if any(np.asarray(frame.positions).shape != position_shape for frame in frames[1:]):
+        return False
+    if first.types is not None:
+        first_types = np.asarray(first.types)
+        if first_types.shape != position_shape[:1]:
+            return False
+        root = first_types.base
+        if isinstance(root, np.ndarray) and root.ndim == 2 and root.shape[1:] == first_types.shape:
+            indices = [int(frame.index) for frame in frames]
+            if indices == list(range(indices[0], indices[0] + len(indices))):
+                view = root[indices[0] : indices[0] + len(indices)]
+                if (
+                    view.shape[0] == len(frames)
+                    and np.shares_memory(view[0], first_types)
+                    and all(
+                        frame.types is not None and np.shares_memory(view[offset], frame.types)
+                        for offset, frame in enumerate(frames)
+                    )
+                ):
+                    return bool(np.all(view == view[0]))
+        return all(frame.types is not None and np.array_equal(frame.types, first.types) for frame in frames[1:])
+    if any(frame.types is not None for frame in frames[1:]):
+        return False
+    if all(frame.symbols is first.symbols for frame in frames[1:]):
+        return True
+    return all(frame.symbols == first.symbols for frame in frames[1:])
 
 
 def finite_difference_velocities(

@@ -1,8 +1,8 @@
 {
   "analysis_name": "oh_orientation",
   "package": "waterint",
-  "config_file": "v0/example/mgo_oh_orientation/config_oh_h2o_h3o_npz.yaml",
-  "trajectory": "v0/example/mgo_oh_orientation/../shared/input/dump.MgO_water_2x2_equil.last100ps.unique.waterint.npz",
+  "config_file": "v0.3/example/mgo_oh_orientation/config_oh_h2o_h3o_npz.yaml",
+  "trajectory": "v0.3/example/shared/input/dump.MgO_water_2x2_equil.last100ps.unique.waterint.npz",
   "axis": "z",
   "species_labels": [
     "OH-",
@@ -22,14 +22,14 @@
   },
   "outputs": {
     "csv": {
-      "OH-": "v0/example/mgo_oh_orientation/output/mgo_oh_h2o_h3o_oh_orientation_full100ps_ohminus.csv",
-      "H2O": "v0/example/mgo_oh_orientation/output/mgo_oh_h2o_h3o_oh_orientation_full100ps_h2o.csv",
-      "H3O+": "v0/example/mgo_oh_orientation/output/mgo_oh_h2o_h3o_oh_orientation_full100ps_h3oplus.csv"
+      "OH-": "v0.3/example/mgo_oh_orientation/output/mgo_oh_h2o_h3o_oh_orientation_full100ps_ohminus.csv",
+      "H2O": "v0.3/example/mgo_oh_orientation/output/mgo_oh_h2o_h3o_oh_orientation_full100ps_h2o.csv",
+      "H3O+": "v0.3/example/mgo_oh_orientation/output/mgo_oh_h2o_h3o_oh_orientation_full100ps_h3oplus.csv"
     },
     "png": {
-      "OH-": "v0/example/mgo_oh_orientation/output/mgo_oh_h2o_h3o_oh_orientation_full100ps_ohminus.png",
-      "H2O": "v0/example/mgo_oh_orientation/output/mgo_oh_h2o_h3o_oh_orientation_full100ps_h2o.png",
-      "H3O+": "v0/example/mgo_oh_orientation/output/mgo_oh_h2o_h3o_oh_orientation_full100ps_h3oplus.png"
+      "OH-": "v0.3/example/mgo_oh_orientation/output/mgo_oh_h2o_h3o_oh_orientation_full100ps_ohminus.png",
+      "H2O": "v0.3/example/mgo_oh_orientation/output/mgo_oh_h2o_h3o_oh_orientation_full100ps_h2o.png",
+      "H3O+": "v0.3/example/mgo_oh_orientation/output/mgo_oh_h2o_h3o_oh_orientation_full100ps_h3oplus.png"
     }
   },
   "config": {
@@ -76,6 +76,7 @@
       "bins": 180
     },
     "angle": {
+      "backend": "auto",
       "vector_mode": "oh_bond",
       "range": [
         0.0,

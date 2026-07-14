@@ -9,7 +9,7 @@ WaterInt v0.3 keeps the v0.2 separation between input, domain helpers, scientifi
   - `selection.py`: element/type-map selection.
   - `coordinates.py`: axis parsing and coordinate references.
   - `species.py`: oxygen-species classification adapters.
-- `_02_computation/`: Python computation APIs, result objects, and `_native.py`.
+- `_02_computation/`: Python computation APIs, result objects, `_native.py`, and local C++ kernels.
   - `density.py`
   - `oh_orientation.py`
   - `hbond.py`
@@ -19,20 +19,29 @@ WaterInt v0.3 keeps the v0.2 separation between input, domain helpers, scientifi
   - `registry/`: `AnalysisModule` and the central workflow registry.
   - `workflows/`: config-driven `run_<method>()` implementations.
 - `_05_ui/`: local UI code.
-- `_cpp/`: optional C++ source files for narrow hot kernels.
 - `_native/`: locally compiled dynamic libraries, ignored by Git.
 
 ## Native Kernel Policy
 
 C++ code should accelerate only narrow hot kernels. The public computation API remains Python, and every native path needs a Python fallback.
 
-The v0.3 prototype adds:
+The v0.3 native layer includes:
 
 ```text
-waterint/_cpp/density.cpp
+waterint/_02_computation/density.cpp
+waterint/chemistry.cpp
+waterint/chemistry.hpp
+waterint/_02_computation/oh_orientation.cpp
+waterint/_02_computation/hbond.cpp
+waterint/_02_computation/sfg.cpp
 waterint/_02_computation/_native.py
 waterint/_02_computation/density.py
+waterint/_02_computation/oh_orientation.py
+waterint/_02_computation/hbond.py
+waterint/_02_computation/sfg.py
 ```
+
+Each C++ source file lives beside the Python module it accelerates. The native loader discovers package-local `*.cpp` files and compiles them into one optional library, keeping installation simple while preserving module ownership.
 
 `density.backend` controls density histogramming:
 
@@ -48,13 +57,47 @@ selection:
   neighbor_method: cpp
 ```
 
+`angle.backend` controls the fused O-H orientation kernel:
+
+```yaml
+angle:
+  backend: auto   # auto, python, or cpp
+```
+
+The reusable chemistry kernel returns an O-H neighbor matrix built with the same cell list used by density. The orientation-specific kernel consumes that matrix to calculate bond or bisector directions and accumulate a two-dimensional z-angle histogram. Config parsing, coordinate references, normalization, and output remain in Python.
+
+`hbond.backend` controls the H-bond kernel:
+
+```yaml
+hbond:
+  backend: auto   # auto, python, or cpp
+```
+
+H-bond analysis consumes the same shared O-H neighbor matrix as orientation. Its local C++ kernel uses `CutoffNeighborSearch` from `chemistry.hpp` for O-O acceptor candidates and evaluates D-H-A geometry. The pure Python route uses the corresponding `PythonCutoffNeighborSearch` from `chemistry.py` and batches local geometry with NumPy. Python retains topology labels, custom class grouping, workflow orchestration, and output in both routes.
+
+`sfg.backend` controls the trajectory-mode ssVVCF kernel:
+
+```yaml
+sfg:
+  mode: trajectory
+  backend: auto   # auto, python, or cpp
+```
+
+The SFG C++ kernel uses `CutoffNeighborSearch` for O-H assignment and owns finite-difference velocities, continuous O-H segment management, windowed signal construction, and FFT-based segment correlation. Python owns config and trajectory orchestration, z-reference calculation, final normalization, Fourier transformation, plotting, and output. The native route requires fixed atom types and ordering; `auto` uses the Python implementation when that contract is not satisfied.
+
 The native library is generated on demand under `waterint/_native/`. Normal users can still run without compiling C++ code because `auto` falls back to Python.
 
 ## Performance Finding
 
 The C++ density histogram kernel is faster than NumPy histogramming on large synthetic arrays and produces identical bin counts. On the full MgO-water density workflow, however, density binning is a small fraction of the runtime.
 
-The C++ O-H neighbor-count kernel is the first backend with a real end-to-end speedup. On the MgO-water density workflow it reduced wall time from about 71.6 s to 51.5 s while producing identical CSV output. The remaining hotspots are NPZ frame reconstruction, selection masks, coordinate references, and Python-level species bookkeeping.
+On the full MgO-water density workflow, the optimized NPZ reader and C++ cell-list kernels reduce the measured runtime from about 49.8 s to 18.7 s while producing identical CSV output.
+
+On the full 100 ps O-H bond orientation workflow, the C++ neighbor-list and orientation kernels reduce the measured analysis runtime from 133.05 s to 21.98 s. Histograms and bond/sample totals match the Python/scipy route exactly. See `BENCHMARK_OH_ORIENTATION_CPP.md` for the stage breakdown.
+
+On the full 100 ps H-bond workflow, the Python cell list reduces runtime from 6706.48 s to 1542.96 s. Shared neighbor-list and C++ geometry kernels reduce it further to 66.67 s. All three routes preserve raw topology counts exactly. See `BENCHMARK_HBOND_CPP.md` for the stage breakdown.
+
+On the full 100 ps trajectory-mode SFG workflow, the native kernel reduces staged runtime from 1738.42 s to 30.20 s, a 57.57x end-to-end speedup. Counts and z-references match exactly, and the maximum absolute correlation difference is `6.846e-13`. See `BENCHMARK_SFG_CPP.md` for the stage breakdown.
 
 ## Workflow Registry
 

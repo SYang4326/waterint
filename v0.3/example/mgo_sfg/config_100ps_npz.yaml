@@ -13,6 +13,7 @@ system:
 
 sfg:
   mode: trajectory
+  backend: auto
   hydrogen_symbol: H
   oxygen_symbol: O
   dt_ps: 0.005

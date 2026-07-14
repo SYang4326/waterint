@@ -36,6 +36,7 @@ coordinate:
   bins: 180
 
 angle:
+  backend: auto
   vector_mode: oh_bond
   range:
     - 0.0

@@ -24,13 +24,23 @@ from waterint._04_workflows.workflows.framewise import run_framewise_analysis
 
 @dataclass
 class HbondWorkflowState:
+    """Configuration and accumulators carried through the frame loop."""
+
     hbond: HbondState
     selection_cfg: dict[str, Any]
     hbond_cfg: dict[str, Any]
     context: SelectionContext
+    backend: str
 
 
 def run_hbond(config: dict[str, Any]) -> HbondResult:
+    """Run the config-driven H-bond analysis and write all requested outputs.
+
+    This workflow owns orchestration only: it resolves config and paths,
+    streams trajectory frames through the computation module, then delegates
+    CSV/plot/metadata writing to the output layer.
+    """
+
     input_cfg, system_cfg, output_cfg = required_workflow_sections(config)
     selection_cfg = require_mapping(config, "selection")
     hbond_cfg = require_mapping(config, "hbond")
@@ -38,12 +48,17 @@ def run_hbond(config: dict[str, Any]) -> HbondResult:
     traj_path = resolve_path(config, input_cfg["trajectory"])
     labels = species_labels(selection_cfg)
     classes = classes_by_species(hbond_cfg, labels)
+    backend = str(hbond_cfg.get("backend", "auto")).lower()
+    if backend not in {"auto", "python", "cpp"}:
+        raise ValueError("hbond.backend must be auto, python, or cpp.")
     state = HbondWorkflowState(
         hbond=new_hbond_state(classes, labels),
         selection_cfg=selection_cfg,
         hbond_cfg=hbond_cfg,
         context=SelectionContext.from_input_config(input_cfg),
+        backend=backend,
     )
+    # The common framewise runner handles trajectory I/O, stride, frame limits, and cell resolution.
     framewise = run_framewise_analysis(
         traj_path=traj_path,
         input_cfg=input_cfg,
@@ -62,6 +77,7 @@ def run_hbond(config: dict[str, Any]) -> HbondResult:
     png_path = outdir / f"{prefix}.png" if bool(output_cfg.get("plot", True)) else None
     metadata_path = outdir / f"{prefix}_metadata.json"
 
+    # Computation is complete here; the remaining work only serializes or plots the result.
     write_hbond_csv(csv_path, result.counts, result.fractions, result.samples_total, result.classes)
     write_raw_hbond_csv(raw_csv_path, result.raw_counts, result.counts, result.samples_total, result.classes)
     if png_path is not None:
@@ -107,6 +123,8 @@ def _accumulate_hbond_frame(
     frame: TrajectoryFrame,
     cell: tuple[float, float, float],
 ) -> None:
+    """Analyze one frame and merge its counts into the workflow state."""
+
     frame_counts, frame_raw_counts, frame_samples = frame_hbond_classes(
         frame=frame,
         selection_cfg=state.selection_cfg,
@@ -115,6 +133,7 @@ def _accumulate_hbond_frame(
         selected_species=state.hbond.species_labels,
         context=state.context,
         cell=cell,
+        backend=state.backend,
     )
     accumulate_frame_counts(state.hbond, frame_counts, frame_raw_counts, frame_samples)
 
@@ -123,4 +142,6 @@ def _finalize_hbond(
     state: HbondWorkflowState,
     _cell: tuple[float, float, float],
 ) -> HbondResult:
+    """Finish the framewise run by calculating topology fractions."""
+
     return finalize_hbond_state(state.hbond)

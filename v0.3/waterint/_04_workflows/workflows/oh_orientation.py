@@ -13,6 +13,8 @@ from waterint._02_computation.oh_orientation import (
     OhOrientationResult,
     OhOrientationState,
     accumulate_angle_samples,
+    accumulate_oh_orientation_cpp,
+    build_oh_neighbor_matrix_cpp,
     finalize_oh_orientation_state,
     neighbor_bisector_z_and_angles,
     new_oh_orientation_state,
@@ -42,6 +44,7 @@ class OhOrientationWorkflowState:
     coordinate: CoordinateSpec
     species_labels: list[str]
     vector_mode: str
+    backend: str
     normalization_cfg: Any
 
 
@@ -65,6 +68,9 @@ def run_oh_orientation(config: dict[str, Any]) -> OhOrientationResult:
     vector_mode = str(angle_cfg.get("vector_mode", "oh_bond")).lower()
     if vector_mode not in {"oh_bond", "oh_bisector", "dipole"}:
         raise ValueError("angle.vector_mode must be oh_bond, oh_bisector, or dipole.")
+    backend = str(angle_cfg.get("backend", "auto")).lower()
+    if backend not in {"auto", "python", "cpp"}:
+        raise ValueError("angle.backend must be auto, python, or cpp.")
 
     labels = species_labels(selection_cfg)
     state = OhOrientationWorkflowState(
@@ -79,6 +85,7 @@ def run_oh_orientation(config: dict[str, Any]) -> OhOrientationResult:
         coordinate=coordinate,
         species_labels=labels,
         vector_mode=vector_mode,
+        backend=backend,
         normalization_cfg=config.get("normalization", {}),
     )
     framewise = run_framewise_analysis(
@@ -174,6 +181,37 @@ def _accumulate_oh_orientation_frame(
     hydrogen_symbol = str(state.selection_cfg.get("hydrogen_symbol", "H"))
     oxygen_indices = element_indices(frame, {oxygen_symbol}, state.context)
     hydrogen_indices = element_indices(frame, {hydrogen_symbol}, state.context)
+    if oxygen_indices.size == 0 or hydrogen_indices.size == 0:
+        state.oh_orientation.frames += 1
+        return
+    if state.backend in {"auto", "cpp"}:
+        oxygen_positions = frame.positions[oxygen_indices]
+        hydrogen_positions = frame.positions[hydrogen_indices]
+        neighbor_data = build_oh_neighbor_matrix_cpp(
+            oxygen_positions=oxygen_positions,
+            hydrogen_positions=hydrogen_positions,
+            cutoff=float(state.selection_cfg.get("oh_cutoff", 1.25)),
+        )
+        if neighbor_data is not None:
+            neighbor_counts, neighbor_matrix = neighbor_data
+            used_cpp = accumulate_oh_orientation_cpp(
+                state.oh_orientation,
+                oxygen_positions=oxygen_positions,
+                hydrogen_positions=hydrogen_positions,
+                neighbor_counts=neighbor_counts,
+                neighbor_matrix=neighbor_matrix,
+                vector_mode=state.vector_mode,
+                axis=state.coordinate.axis,
+                axis_sign=state.coordinate.sign,
+                reference=reference,
+                angle_axis_sign=float(state.angle_cfg.get("axis_sign", 1.0)),
+            )
+            if used_cpp:
+                state.oh_orientation.frames += 1
+                return
+        if state.backend == "cpp":
+            raise RuntimeError("C++ O-H orientation backend is not available.")
+        state.backend = "python"
     if state.vector_mode == "oh_bond":
         pairs_by_species = oxygen_hydrogen_pairs_by_species(
             frame.symbols,

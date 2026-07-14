@@ -1,6 +1,6 @@
 # WaterInt v0.3
 
-WaterInt v0.3 is an experimental performance line based on v0.2. It keeps the v0.2 registry architecture and adds optional C++ backends for density histogramming and O-H neighbor counting.
+WaterInt v0.3 is an experimental performance line based on v0.2. It keeps the v0.2 registry architecture and adds optional C++ backends for density, O-H orientation, H-bond, and trajectory-based SFG kernels.
 
 Documentation website:
 
@@ -8,14 +8,17 @@ https://water-interface-analysis.syang4326m.workers.dev/
 
 ## What Changed From v0.2
 
-- Added `waterint/_cpp/` for small C++ kernels.
+- Added small C++ kernels beside the Python modules that own them.
 - Added `waterint/_02_computation/_native.py` to compile and load native code with the Python standard library.
 - Added `density.backend: auto | python | cpp`.
+- Added `angle.backend: auto | python | cpp` for O-H orientation.
+- Added `hbond.backend: auto | python | cpp` for H-bond geometry.
+- Added `sfg.backend: auto | python | cpp` for trajectory-mode ssVVCF construction.
 - Added `selection.neighbor_method: cpp` for O-H neighbor counting used by oxygen-species classification.
 - Added experimental `input.reader: auto | python | cpp` for standard XYZ and common orthorhombic LAMMPS dump files.
 - Kept Python as the public API and fallback path.
 
-The density histogram backend is useful as a minimal native-code test. The O-H neighbor-count backend is the first backend that materially speeds up the MgO-water density workflow, because oxygen-species classification is a real hotspot.
+The chemistry layer provides corresponding shared Python and C++ cell-list implementations. Density uses count-only queries, while O-H orientation and H-bond analysis reuse full O-H neighbor identities. H-bond analysis uses the same spatial-search abstraction for O-O acceptor candidates.
 
 ## C++ Backend
 
@@ -37,19 +40,53 @@ Backend modes:
 
 For `selection.neighbor_method`, `auto` tries C++ first for species counts and falls back to the previous Python/scipy paths if native compilation is unavailable. `cpp` requires the C++ neighbor-count backend.
 
+O-H orientation uses a separate backend field:
+
+```yaml
+angle:
+  backend: auto
+  vector_mode: oh_bond
+```
+
+The C++ orientation path supports `oh_bond`, `oh_bisector`, and `dipole`. It reuses the shared C++ O-H cell list, calculates orientation vectors, and accumulates the z-angle histogram without materializing Python pair lists. `auto` falls back to the existing Python/scipy implementation when native compilation is unavailable.
+
+H-bond analysis uses the same backend convention:
+
+```yaml
+hbond:
+  backend: auto
+```
+
+The native route reuses the shared O-H neighbor matrix and accelerates O-O candidate search and D-H-A geometry. Python still handles config validation, topology labels, grouping, and output.
+
+When `hbond.backend: python` is selected, WaterInt uses a Python cell list and frame-level NumPy geometry batch by default. This replaces the original donor-to-all-oxygen scan while retaining a pure Python/scipy/NumPy calculation route.
+
+Trajectory-mode SFG follows the same convention:
+
+```yaml
+sfg:
+  mode: trajectory
+  backend: auto
+```
+
+The native SFG path reuses the shared C++ O-H cell list and accelerates finite-difference velocities, O-H assignment, continuous bond-segment construction, and segment correlation. Python retains config handling, trajectory loading, z-reference calculation, Fourier transformation, plotting, and file output. The C++ path requires fixed atom types and ordering; `auto` falls back to Python for variable-topology trajectories.
+
 The native library is built on demand into:
 
 ```text
 waterint/_native/
 ```
 
-This directory is ignored by Git. The C++ source remains readable in:
+This directory is ignored by Git. The C++ source remains beside its corresponding Python module:
 
 ```text
-waterint/_cpp/density.cpp
-waterint/_cpp/chemistry.cpp
-waterint/_cpp/xyz.cpp
-waterint/_cpp/lammpstrj.cpp
+waterint/_02_computation/density.py          + density.cpp
+waterint/chemistry.py                        + chemistry.cpp
+waterint/_02_computation/oh_orientation.py   + oh_orientation.cpp
+waterint/_02_computation/hbond.py            + hbond.cpp
+waterint/_02_computation/sfg.py              + sfg.cpp
+waterint/_00_io/xyz.py                       + xyz.cpp
+waterint/_00_io/lammpstrj.py                 + lammpstrj.cpp
 ```
 
 For standard XYZ input, the experimental reader can be selected with:
@@ -75,13 +112,12 @@ The C++ text readers are intentionally narrow. The XYZ reader supports fixed-top
 ```text
 _00_io/            trajectory readers and NPZ cache support
 _01_core/          shared coordinate, selection, and species helpers
-_02_computation/   Python computation APIs and optional native adapter
+_02_computation/   Python computation APIs, local C++ kernels, and native adapter
 _03_output/        one output helper file per analysis module
 _04_workflows/
   registry/             AnalysisModule definition, registry, and adding-module guide
   workflows/            config-driven run_<method>() orchestration
 _05_ui/            local UI code
-_cpp/              optional C++ kernels
 _native/           local compiled libraries, ignored by Git
 ```
 

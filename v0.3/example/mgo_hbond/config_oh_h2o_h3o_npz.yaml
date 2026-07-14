@@ -23,6 +23,7 @@ selection:
   neighbor_workers: 1
 
 hbond:
+  backend: auto
   oo_cutoff: 3.5
   dha_angle_min: 150.0
   h_acceptor_cutoff: null

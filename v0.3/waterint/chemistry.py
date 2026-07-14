@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from itertools import product
+
 import numpy as np
 
 from waterint._02_computation._native import classify_oxygen_by_h_count_compact
@@ -12,6 +14,131 @@ OXYGEN_SPECIES_BY_H_COUNT = {
     2: "H2O",
     3: "H3O+",
 }
+
+
+class PythonCutoffNeighborSearch:
+    """Reusable orthorhombic cell list implemented with Python and NumPy.
+
+    Candidate atoms are binned once. A query inspects only its own bin and
+    adjacent bins, then applies an exact minimum-image distance check. Returned
+    indices are sorted to keep backend tie behavior deterministic.
+    """
+
+    def __init__(
+        self,
+        query_positions: np.ndarray,
+        candidate_positions: np.ndarray,
+        *,
+        cutoff: float,
+        cell: tuple[float, float, float] | None = None,
+        pbc: tuple[bool, bool, bool] | None = None,
+    ) -> None:
+        self.query_positions = np.ascontiguousarray(query_positions, dtype=float)
+        self.candidate_positions = np.ascontiguousarray(candidate_positions, dtype=float)
+        if self.query_positions.ndim != 2 or self.query_positions.shape[1] != 3:
+            raise ValueError("query_positions must have shape (n, 3).")
+        if self.candidate_positions.ndim != 2 or self.candidate_positions.shape[1] != 3:
+            raise ValueError("candidate_positions must have shape (n, 3).")
+        if cutoff <= 0:
+            raise ValueError("cutoff must be positive.")
+
+        self.cutoff2 = float(cutoff) ** 2
+        self.pbc = (False, False, False) if pbc is None else tuple(bool(flag) for flag in pbc)
+        if len(self.pbc) != 3:
+            raise ValueError("pbc must contain three boolean flags.")
+        if any(self.pbc):
+            if cell is None or len(cell) != 3 or any(float(length) <= 0 for length in cell):
+                raise ValueError("A positive three-length cell is required when pbc is enabled.")
+        self.cell = np.zeros(3, dtype=float) if cell is None else np.asarray(cell, dtype=float)
+
+        self.origin = np.zeros(3, dtype=float)
+        self.length = np.zeros(3, dtype=float)
+        all_positions = np.vstack((self.query_positions, self.candidate_positions))
+        for axis in range(3):
+            if self.pbc[axis]:
+                self.length[axis] = self.cell[axis]
+                continue
+            if all_positions.shape[0] == 0:
+                lower = 0.0
+                upper = 0.0
+            else:
+                lower = float(np.min(all_positions[:, axis]))
+                upper = float(np.max(all_positions[:, axis]))
+            self.origin[axis] = lower - cutoff
+            self.length[axis] = max(float(cutoff), upper - lower + 2.0 * cutoff)
+
+        self.bin_counts = np.maximum(1, np.floor(self.length / cutoff).astype(int))
+        self.bin_width = self.length / self.bin_counts
+        self.query_bins = self._position_bins(self.query_positions)
+        candidate_bins = self._position_bins(self.candidate_positions)
+        self.candidates_by_bin: dict[tuple[int, int, int], list[int]] = {}
+        for candidate_index, raw_bin in enumerate(candidate_bins):
+            bin_key = tuple(int(value) for value in raw_bin)
+            self.candidates_by_bin.setdefault(bin_key, []).append(candidate_index)
+        self.candidate_cache: dict[tuple[int, int, int], np.ndarray] = {}
+
+    def collect_indices(self, query_index: int) -> np.ndarray:
+        """Return sorted candidate indices within cutoff of one query atom."""
+
+        center = tuple(int(value) for value in self.query_bins[query_index])
+        candidates = self.candidate_cache.get(center)
+        if candidates is None:
+            candidate_lists = [
+                self.candidates_by_bin[bin_key]
+                for bin_key in self._neighbor_bins(center)
+                if bin_key in self.candidates_by_bin
+            ]
+            candidates = (
+                np.sort(np.concatenate([np.asarray(items, dtype=int) for items in candidate_lists]))
+                if candidate_lists
+                else np.empty(0, dtype=int)
+            )
+            self.candidate_cache[center] = candidates
+        if candidates.size == 0:
+            return candidates
+
+        vectors = self.candidate_positions[candidates] - self.query_positions[query_index]
+        vectors = self.minimum_image(vectors)
+        distances2 = np.einsum("ij,ij->i", vectors, vectors)
+        return candidates[distances2 <= self.cutoff2]
+
+    def minimum_image(self, vectors: np.ndarray) -> np.ndarray:
+        """Apply this search's minimum-image convention to displacement vectors."""
+
+        out = np.asarray(vectors, dtype=float).copy()
+        for axis, enabled in enumerate(self.pbc):
+            if enabled:
+                out[..., axis] -= np.rint(out[..., axis] / self.cell[axis]) * self.cell[axis]
+        return out
+
+    def _position_bins(self, positions: np.ndarray) -> np.ndarray:
+        """Map Cartesian positions to integer cell-list bins."""
+
+        shifted = np.asarray(positions, dtype=float) - self.origin
+        for axis, enabled in enumerate(self.pbc):
+            if enabled:
+                shifted[:, axis] -= np.floor(shifted[:, axis] / self.length[axis]) * self.length[axis]
+        bins = np.floor(shifted / self.bin_width).astype(int)
+        return np.clip(bins, 0, self.bin_counts - 1)
+
+    def _neighbor_bins(self, center: tuple[int, int, int]) -> list[tuple[int, int, int]]:
+        """Return unique adjacent bins, wrapping only periodic axes."""
+
+        neighbors: set[tuple[int, int, int]] = set()
+        for offset in product((-1, 0, 1), repeat=3):
+            values: list[int] = []
+            valid = True
+            for axis in range(3):
+                value = center[axis] + offset[axis]
+                if self.pbc[axis]:
+                    value %= int(self.bin_counts[axis])
+                elif value < 0 or value >= self.bin_counts[axis]:
+                    valid = False
+                    break
+                values.append(int(value))
+            if valid:
+                neighbors.add((values[0], values[1], values[2]))
+        return sorted(neighbors)
 
 
 def classify_oxygen_by_h_count(

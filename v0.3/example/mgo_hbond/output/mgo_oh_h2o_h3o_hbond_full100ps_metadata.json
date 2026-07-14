@@ -1,8 +1,8 @@
 {
   "analysis_name": "hbond",
   "package": "waterint",
-  "config_file": "v0/example/mgo_hbond/config_oh_h2o_h3o_npz.yaml",
-  "trajectory": "v0/example/mgo_hbond/../shared/input/dump.MgO_water_2x2_equil.last100ps.unique.waterint.npz",
+  "config_file": "v0.3/example/mgo_hbond/config_oh_h2o_h3o_npz.yaml",
+  "trajectory": "v0.3/example/shared/input/dump.MgO_water_2x2_equil.last100ps.unique.waterint.npz",
   "frames": 20001,
   "species_labels": [
     "OH-",
@@ -44,9 +44,9 @@
     "H3O+": 0
   },
   "outputs": {
-    "csv": "v0/example/mgo_hbond/output/mgo_oh_h2o_h3o_hbond_full100ps.csv",
-    "raw_csv": "v0/example/mgo_hbond/output/mgo_oh_h2o_h3o_hbond_full100ps_raw.csv",
-    "png": "v0/example/mgo_hbond/output/mgo_oh_h2o_h3o_hbond_full100ps.png"
+    "csv": "v0.3/example/mgo_hbond/output/mgo_oh_h2o_h3o_hbond_full100ps.csv",
+    "raw_csv": "v0.3/example/mgo_hbond/output/mgo_oh_h2o_h3o_hbond_full100ps_raw.csv",
+    "png": "v0.3/example/mgo_hbond/output/mgo_oh_h2o_h3o_hbond_full100ps.png"
   },
   "config": {
     "input": {
@@ -76,6 +76,7 @@
       "neighbor_workers": 1
     },
     "hbond": {
+      "backend": "auto",
       "oo_cutoff": 3.5,
       "dha_angle_min": 150.0,
       "h_acceptor_cutoff": null,

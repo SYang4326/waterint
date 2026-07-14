@@ -69,5 +69,6 @@
       "flip": true,
       "title": "MgO-water SFG quick example, first 200 frames"
     }
-  }
+  },
+  "velocity_source": "finite_difference"
 }

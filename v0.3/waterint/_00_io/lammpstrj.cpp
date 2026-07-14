@@ -16,6 +16,7 @@ struct WaterintLammpstrjData {
     std::size_t n_frames;
     std::size_t n_atoms;
     double* positions;
+    double* velocities;
     std::int64_t* types;
     double* cells;
     std::int64_t* steps;
@@ -124,12 +125,21 @@ bool parse_atom_row(
     int x_col,
     int y_col,
     int z_col,
+    int vx_col,
+    int vy_col,
+    int vz_col,
     std::int64_t* type_value,
     double* x,
     double* y,
-    double* z
+    double* z,
+    double* vx,
+    double* vy,
+    double* vz
 ) {
-    const int needed = std::max(std::max(type_col, x_col), std::max(y_col, z_col));
+    const int needed = std::max(
+        std::max(std::max(type_col, x_col), std::max(y_col, z_col)),
+        std::max(vx_col, std::max(vy_col, vz_col))
+    );
     if (needed < 0) {
         return false;
     }
@@ -172,6 +182,16 @@ bool parse_atom_row(
                 return false;
             }
             cursor = end;
+        } else if (column == vx_col || column == vy_col || column == vz_col) {
+            errno = 0;
+            const double parsed = std::strtod(cursor, &end);
+            if (errno != 0 || end == cursor) {
+                return false;
+            }
+            if (column == vx_col) *vx = parsed;
+            if (column == vy_col) *vy = parsed;
+            if (column == vz_col) *vz = parsed;
+            cursor = end;
         } else {
             while (*cursor != '\0' && !std::isspace(static_cast<unsigned char>(*cursor))) {
                 ++cursor;
@@ -191,7 +211,7 @@ extern "C" int waterint_read_lammpstrj_file(
     if (path == nullptr || out == nullptr) {
         return 1;
     }
-    *out = WaterintLammpstrjData{0, 0, nullptr, nullptr, nullptr, nullptr, nullptr};
+    *out = WaterintLammpstrjData{0, 0, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
 
     FILE* handle = std::fopen(path, "rb");
     if (handle == nullptr) {
@@ -203,9 +223,12 @@ extern "C" int waterint_read_lammpstrj_file(
     std::size_t n_atoms = 0;
     std::size_t n_frames = 0;
     std::vector<double> positions;
+    std::vector<double> velocities;
     std::vector<std::int64_t> types;
     std::vector<double> cells;
     std::vector<std::int64_t> steps;
+    bool velocity_layout_known = false;
+    bool trajectory_has_velocities = false;
 
     while (max_frames == 0 || n_frames < max_frames) {
         if (!read_line(handle, line)) {
@@ -252,6 +275,7 @@ extern "C" int waterint_read_lammpstrj_file(
             n_atoms = frame_atoms;
             const std::size_t reserve_frames = max_frames == 0 ? 1 : max_frames;
             positions.reserve(reserve_frames * n_atoms * 3);
+            velocities.reserve(reserve_frames * n_atoms * 3);
             types.reserve(reserve_frames * n_atoms);
             cells.reserve(reserve_frames * 3);
             steps.reserve(reserve_frames);
@@ -299,10 +323,27 @@ extern "C" int waterint_read_lammpstrj_file(
         const int x_col = column_index(columns, "x");
         const int y_col = column_index(columns, "y");
         const int z_col = column_index(columns, "z");
+        const int vx_col = column_index(columns, "vx");
+        const int vy_col = column_index(columns, "vy");
+        const int vz_col = column_index(columns, "vz");
         if (type_col < 0 || x_col < 0 || y_col < 0 || z_col < 0) {
             std::fclose(handle);
             set_error(out, "LAMMPS dump missing one of: type, x, y, z.");
             return 15;
+        }
+        const bool has_velocities = vx_col >= 0 || vy_col >= 0 || vz_col >= 0;
+        if (has_velocities && (vx_col < 0 || vy_col < 0 || vz_col < 0)) {
+            std::fclose(handle);
+            set_error(out, "LAMMPS dump must include vx, vy, and vz together.");
+            return 20;
+        }
+        if (!velocity_layout_known) {
+            velocity_layout_known = true;
+            trajectory_has_velocities = has_velocities;
+        } else if (trajectory_has_velocities != has_velocities) {
+            std::fclose(handle);
+            set_error(out, "LAMMPS dump velocity columns must be present in every frame or none.");
+            return 21;
         }
 
         steps.push_back(timestep);
@@ -319,7 +360,13 @@ extern "C" int waterint_read_lammpstrj_file(
             double x = 0.0;
             double y = 0.0;
             double z = 0.0;
-            if (!parse_atom_row(line, type_col, x_col, y_col, z_col, &type_value, &x, &y, &z)) {
+            double vx = 0.0;
+            double vy = 0.0;
+            double vz = 0.0;
+            if (!parse_atom_row(
+                line, type_col, x_col, y_col, z_col, vx_col, vy_col, vz_col,
+                &type_value, &x, &y, &z, &vx, &vy, &vz
+            )) {
                 std::fclose(handle);
                 set_error(out, "Bad atom row.");
                 return 17;
@@ -328,6 +375,11 @@ extern "C" int waterint_read_lammpstrj_file(
             positions.push_back(x);
             positions.push_back(y);
             positions.push_back(z);
+            if (trajectory_has_velocities) {
+                velocities.push_back(vx);
+                velocities.push_back(vy);
+                velocities.push_back(vz);
+            }
         }
         ++n_frames;
     }
@@ -340,19 +392,29 @@ extern "C" int waterint_read_lammpstrj_file(
     }
 
     out->positions = static_cast<double*>(std::malloc(positions.size() * sizeof(double)));
+    out->velocities = velocities.empty()
+        ? nullptr
+        : static_cast<double*>(std::malloc(velocities.size() * sizeof(double)));
     out->types = static_cast<std::int64_t*>(std::malloc(types.size() * sizeof(std::int64_t)));
     out->cells = static_cast<double*>(std::malloc(cells.size() * sizeof(double)));
     out->steps = static_cast<std::int64_t*>(std::malloc(steps.size() * sizeof(std::int64_t)));
-    if (out->positions == nullptr || out->types == nullptr || out->cells == nullptr || out->steps == nullptr) {
+    if (
+        out->positions == nullptr || (!velocities.empty() && out->velocities == nullptr) ||
+        out->types == nullptr || out->cells == nullptr || out->steps == nullptr
+    ) {
         std::free(out->positions);
+        std::free(out->velocities);
         std::free(out->types);
         std::free(out->cells);
         std::free(out->steps);
-        *out = WaterintLammpstrjData{0, 0, nullptr, nullptr, nullptr, nullptr, nullptr};
+        *out = WaterintLammpstrjData{0, 0, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
         set_error(out, "Could not allocate LAMMPS dump output buffers.");
         return 19;
     }
     std::memcpy(out->positions, positions.data(), positions.size() * sizeof(double));
+    if (!velocities.empty()) {
+        std::memcpy(out->velocities, velocities.data(), velocities.size() * sizeof(double));
+    }
     std::memcpy(out->types, types.data(), types.size() * sizeof(std::int64_t));
     std::memcpy(out->cells, cells.data(), cells.size() * sizeof(double));
     std::memcpy(out->steps, steps.data(), steps.size() * sizeof(std::int64_t));
@@ -366,9 +428,10 @@ extern "C" void waterint_free_lammpstrj_data(WaterintLammpstrjData* data) {
         return;
     }
     std::free(data->positions);
+    std::free(data->velocities);
     std::free(data->types);
     std::free(data->cells);
     std::free(data->steps);
     std::free(data->error);
-    *data = WaterintLammpstrjData{0, 0, nullptr, nullptr, nullptr, nullptr, nullptr};
+    *data = WaterintLammpstrjData{0, 0, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
 }

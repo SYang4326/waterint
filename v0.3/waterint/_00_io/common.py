@@ -14,3 +14,4 @@ class TrajectoryFrame:
     cell: tuple[float, float, float] | None = None
     step: int | None = None
     types: np.ndarray | None = None
+    velocities: np.ndarray | None = None

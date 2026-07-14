@@ -71,6 +71,19 @@ sfg:
 
 The native SFG path reuses the shared C++ O-H cell list and accelerates finite-difference velocities, O-H assignment, continuous bond-segment construction, and segment correlation. Python retains config handling, trajectory loading, z-reference calculation, Fourier transformation, plotting, and file output. The C++ path requires fixed atom types and ordering; `auto` falls back to Python for variable-topology trajectories.
 
+For a LAMMPS dump containing all of `vx vy vz`, SFG can use the stored velocities directly instead of estimating them from positions:
+
+```yaml
+input:
+  format: lammpstrj
+
+sfg:
+  velocity_source: auto              # auto, trajectory, or finite_difference
+  trajectory_velocity_unit: A/ps     # use A/fs for LAMMPS real units
+```
+
+`auto` uses trajectory velocities only when every selected frame has all three velocity columns; otherwise it uses the existing finite-difference route. `trajectory` requires those columns and fails clearly when they are absent. WaterInt converts `A/fs` to its internal `A/ps` convention. `convert-lammpstrj` preserves velocity arrays in an NPZ cache, so the same option also works after conversion.
+
 The native library is built on demand into:
 
 ```text

@@ -14,8 +14,9 @@ from waterint._02_computation.sfg import (
     build_sfg_segments_python,
     contiguous_frame_positions,
     correlate_sfg_segments_python,
-    finite_difference_velocities,
     pbc_flags,
+    sfg_velocities_from_frames,
+    trajectory_velocities_from_frames,
     zref_series,
 )
 from waterint._04_workflows.workflows.common import iter_frames, parse_cell, resolve_path
@@ -24,7 +25,7 @@ from waterint._04_workflows.workflows.common import iter_frames, parse_cell, res
 STAGE_NAMES = (
     "Read NPZ frames",
     "Reference + O/H selection",
-    "Finite-difference velocities",
+    "Velocity preparation",
     "O-H assignment",
     "Segment signal construction",
     "Segment correlation",
@@ -102,8 +103,13 @@ def run_profile(config: dict[str, Any], *, backend: str) -> tuple[dict[str, Any]
 
     if backend == "python":
         velocity_start = time.perf_counter()
-        velocities = finite_difference_velocities(frames, dt_ps=dt_ps, cell=cell, pbc=pbc)
-        timings["Finite-difference velocities"] = time.perf_counter() - velocity_start
+        velocities, _velocity_source = sfg_velocities_from_frames(
+            frames,
+            sfg_cfg=sfg_cfg,
+            cell=cell,
+            pbc=pbc,
+        )
+        timings["Velocity preparation"] = time.perf_counter() - velocity_start
 
         segment_start = time.perf_counter()
         segments = build_sfg_segments_python(
@@ -137,9 +143,11 @@ def run_profile(config: dict[str, Any], *, backend: str) -> tuple[dict[str, Any]
         )
         timings["Segment correlation"] = time.perf_counter() - correlation_start
     else:
+        supplied_velocities = trajectory_velocities_from_frames(frames, sfg_cfg=sfg_cfg)
         native_start = time.perf_counter()
         native_result = sfg_ssvvcf(
             contiguous_frame_positions(frames),
+            supplied_velocities,
             oxygen_indices,
             hydrogen_indices,
             zrefs,
@@ -159,7 +167,7 @@ def run_profile(config: dict[str, Any], *, backend: str) -> tuple[dict[str, Any]
             raise RuntimeError("C++ SFG backend is not available.")
         sums, counts, native_stages = native_result
         timings["O-H assignment"] = float(native_stages[0])
-        timings["Finite-difference velocities"] = float(native_stages[1])
+        timings["Velocity preparation"] = float(native_stages[1])
         timings["Segment signal construction"] = float(native_stages[2])
         timings["Segment correlation"] = float(native_stages[3])
         timings["Other overhead"] += native_wall - float(np.sum(native_stages))

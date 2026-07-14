@@ -218,9 +218,9 @@ ITEM: BOX BOUNDS pp pp ff
 0 11
 -1 12
 ITEM: ATOMS id type x y z vx vy vz
-1 3 0.0 0.1 0.2 0 0 0
-2 1 0.8 0.1 0.2 0 0 0
-3 2 2.0 2.1 2.2 0 0 0
+1 3 0.0 0.1 0.2 1.0 2.0 3.0
+2 1 0.8 0.1 0.2 4.0 5.0 6.0
+3 2 2.0 2.1 2.2 7.0 8.0 9.0
 ITEM: TIMESTEP
 20
 ITEM: NUMBER OF ATOMS
@@ -230,9 +230,9 @@ ITEM: BOX BOUNDS pp pp ff
 0 11
 -1 12
 ITEM: ATOMS id type x y z vx vy vz
-1 3 0.2 0.3 0.4 0 0 0
-2 1 0.9 0.3 0.4 0 0 0
-3 2 2.2 2.3 2.4 0 0 0
+1 3 0.2 0.3 0.4 -1.0 -2.0 -3.0
+2 1 0.9 0.3 0.4 -4.0 -5.0 -6.0
+3 2 2.2 2.3 2.4 -7.0 -8.0 -9.0
 """
         type_map = {1: "H", 2: "Mg", 3: "O"}
         with tempfile.TemporaryDirectory() as tmp:
@@ -248,6 +248,9 @@ ITEM: ATOMS id type x y z vx vy vz
             self.assertEqual(actual.step, expected.step)
             np.testing.assert_array_equal(actual.types, expected.types)
             np.testing.assert_allclose(actual.positions, expected.positions)
+            self.assertIsNotNone(actual.velocities)
+            self.assertIsNotNone(expected.velocities)
+            np.testing.assert_allclose(actual.velocities, expected.velocities)
 
     def test_npz_reader_reuses_symbols_for_fixed_topology(self):
         npz = importlib.import_module("waterint._00_io.npz")
@@ -272,6 +275,48 @@ ITEM: ATOMS id type x y z vx vy vz
         self.assertEqual(frames[0].symbols, ["H", "O"])
         self.assertIs(frames[0].symbols, frames[1].symbols)
         np.testing.assert_allclose(frames[1].positions, positions[1])
+
+    def test_npz_conversion_preserves_lammpstrj_velocities(self):
+        npz = importlib.import_module("waterint._00_io.npz")
+
+        content = """ITEM: TIMESTEP
+0
+ITEM: NUMBER OF ATOMS
+2
+ITEM: BOX BOUNDS pp pp pp
+0 10
+0 10
+0 10
+ITEM: ATOMS id type x y z vx vy vz
+1 3 0.0 0.0 0.0 1.0 2.0 3.0
+2 1 1.0 0.0 0.0 4.0 5.0 6.0
+ITEM: TIMESTEP
+1
+ITEM: NUMBER OF ATOMS
+2
+ITEM: BOX BOUNDS pp pp pp
+0 10
+0 10
+0 10
+ITEM: ATOMS id type x y z vx vy vz
+1 3 0.1 0.0 0.0 -1.0 -2.0 -3.0
+2 1 1.1 0.0 0.0 -4.0 -5.0 -6.0
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dump_path = root / "input.lammpstrj"
+            npz_path = root / "input.npz"
+            dump_path.write_text(content, encoding="utf-8")
+            npz.write_npz_from_lammpstrj(
+                trajectory_path=dump_path,
+                output_path=npz_path,
+                type_map={1: "H", 3: "O"},
+            )
+            frames = list(npz.read_npz(npz_path, type_map={1: "H", 3: "O"}))
+
+        self.assertEqual(len(frames), 2)
+        np.testing.assert_allclose(frames[0].velocities, [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+        np.testing.assert_allclose(frames[1].velocities, [[-1.0, -2.0, -3.0], [-4.0, -5.0, -6.0]])
 
 
 if __name__ == "__main__":

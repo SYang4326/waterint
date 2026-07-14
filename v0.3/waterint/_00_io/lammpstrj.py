@@ -19,7 +19,7 @@ def read_lammpstrj(
 ) -> Iterator[TrajectoryFrame]:
     """Stream orthorhombic LAMMPS dump frames.
 
-    Supported atom columns include `id type x y z`, with optional extra columns.
+    Supported atom columns include `id type x y z` and optional `vx vy vz`.
     Triclinic tilt factors are not interpreted yet.
     """
     dump_path = Path(path)
@@ -46,6 +46,7 @@ def read_lammpstrj(
         yielded = 0
         shared_symbols = None
         shared_types = None
+        velocity_columns_expected: bool | None = None
         while True:
             line = handle.readline()
             if not line:
@@ -75,6 +76,16 @@ def read_lammpstrj(
             missing = [name for name in required if name not in col_index]
             if missing:
                 raise ValueError(f"LAMMPS dump missing required atom columns: {missing}")
+            velocity_columns = ["vx", "vy", "vz"]
+            present_velocity_columns = [name for name in velocity_columns if name in col_index]
+            if present_velocity_columns and len(present_velocity_columns) != len(velocity_columns):
+                raise ValueError("LAMMPS dump must include vx, vy, and vz together.")
+            has_velocities = bool(present_velocity_columns)
+            if velocity_columns_expected is None:
+                velocity_columns_expected = has_velocities
+            elif has_velocities != velocity_columns_expected:
+                raise ValueError("LAMMPS dump velocity columns must be present in every frame or none.")
+            velocities = np.empty((natoms, 3), dtype=float) if present_velocity_columns else None
 
             should_yield = (
                 (start_timestep is None or timestep >= start_timestep)
@@ -99,6 +110,12 @@ def read_lammpstrj(
                     float(fields[col_index["y"]]),
                     float(fields[col_index["z"]]),
                 ]
+                if velocities is not None:
+                    velocities[atom_i] = [
+                        float(fields[col_index["vx"]]),
+                        float(fields[col_index["vy"]]),
+                        float(fields[col_index["vz"]]),
+                    ]
             if shared_types is None:
                 shared_types = types.copy()
                 shared_symbols = _symbols_from_types(types, symbol_by_type)
@@ -115,6 +132,7 @@ def read_lammpstrj(
                 cell=cell,
                 step=timestep,
                 types=types,
+                velocities=velocities,
             )
             yielded += 1
             if max_frames is not None and yielded >= max_frames:
@@ -151,7 +169,7 @@ def _read_lammpstrj_cpp(
     loaded = read_lammpstrj_file(path, max_frames=max_frames)
     if loaded is None:
         return None
-    positions, types, cells, steps = loaded
+    positions, types, cells, steps, velocities = loaded
     shared_symbols = _symbols_from_types(types[0], symbol_by_type)
 
     def iter_loaded() -> Iterator[TrajectoryFrame]:
@@ -167,6 +185,7 @@ def _read_lammpstrj_cpp(
                 cell=tuple(float(v) for v in cells[frame_index]),
                 step=step,
                 types=frame_types,
+                velocities=None if velocities is None else velocities[frame_index],
             )
 
     return iter_loaded()

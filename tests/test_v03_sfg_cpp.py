@@ -115,6 +115,61 @@ class V03SfgCppTests(unittest.TestCase):
                 context=context,
             )
 
+    def test_trajectory_velocities_override_finite_difference_in_both_backends(self):
+        sfg = importlib.import_module("waterint._02_computation.sfg")
+        frames, context = self._velocity_frames(velocity_scale=1.0)
+        results = {}
+        for backend in ["python", "cpp"]:
+            config = self._config(backend=backend, window=None)
+            config.update({"velocity_source": "auto", "trajectory_velocity_unit": "A/ps", "symmetrize": False})
+            results[backend] = sfg.compute_ssvvcf_from_frames(
+                frames,
+                cell=(10.0, 10.0, 10.0),
+                sfg_cfg=config,
+                context=context,
+            )
+        self._assert_results_equal(results["python"], results["cpp"])
+        self.assertEqual(results["python"].velocity_source, "trajectory")
+        self.assertGreater(abs(results["python"].corr[0]), 1.0)
+
+        finite_difference_config = self._config(backend="python", window=None)
+        finite_difference_config.update({"velocity_source": "finite_difference", "symmetrize": False})
+        finite_difference = sfg.compute_ssvvcf_from_frames(
+            frames,
+            cell=(10.0, 10.0, 10.0),
+            sfg_cfg=finite_difference_config,
+            context=context,
+        )
+        self.assertEqual(finite_difference.velocity_source, "finite_difference")
+        np.testing.assert_allclose(finite_difference.corr, 0.0)
+
+    def test_trajectory_velocity_afs_unit_converts_to_internal_aps(self):
+        sfg = importlib.import_module("waterint._02_computation.sfg")
+        frames, context = self._velocity_frames(velocity_scale=0.001)
+        config = self._config(backend="python", window=None)
+        config.update({"velocity_source": "trajectory", "trajectory_velocity_unit": "A/fs", "symmetrize": False})
+        result = sfg.compute_ssvvcf_from_frames(
+            frames,
+            cell=(10.0, 10.0, 10.0),
+            sfg_cfg=config,
+            context=context,
+        )
+        self.assertEqual(result.velocity_source, "trajectory")
+        self.assertAlmostEqual(result.corr[0], 6.0)
+
+    def test_trajectory_velocity_source_requires_velocities(self):
+        sfg = importlib.import_module("waterint._02_computation.sfg")
+        frames, context = self._frames()
+        config = self._config(backend="python", window=None)
+        config["velocity_source"] = "trajectory"
+        with self.assertRaisesRegex(ValueError, "requires vx, vy, and vz"):
+            sfg.compute_ssvvcf_from_frames(
+                frames,
+                cell=(10.0, 10.0, 10.0),
+                sfg_cfg=config,
+                context=context,
+            )
+
     def _run_both(self, *, mu_mode, symmetrize, flip_sign, window):
         sfg = importlib.import_module("waterint._02_computation.sfg")
         native = importlib.import_module("waterint._02_computation._native")
@@ -212,6 +267,29 @@ class V03SfgCppTests(unittest.TestCase):
                 cell=(10.0, 10.0, 10.0),
                 step=index,
                 types=types,
+            )
+            for index in range(3)
+        ]
+        return frames, selection.SelectionContext.from_input_config({"type_map": {1: "H", 3: "O"}})
+
+    @staticmethod
+    def _velocity_frames(*, velocity_scale: float):
+        common = importlib.import_module("waterint._00_io.common")
+        selection = importlib.import_module("waterint._01_core.selection")
+        symbols = ["O", "H"]
+        types = np.asarray([3, 1], dtype=int)
+        positions = np.asarray([[0.0, 0.0, 0.5], [1.0, 0.0, 0.5]])
+        velocities = np.asarray([[0.0, 0.0, 0.0], [2.0 * velocity_scale, 0.0, 3.0 * velocity_scale]])
+        frames = [
+            common.TrajectoryFrame(
+                index=index,
+                comment=f"frame {index}",
+                symbols=symbols,
+                positions=positions.copy(),
+                cell=(10.0, 10.0, 10.0),
+                step=index,
+                types=types,
+                velocities=velocities.copy(),
             )
             for index in range(3)
         ]

@@ -26,6 +26,7 @@ class _LammpstrjData(ctypes.Structure):
         ("n_frames", ctypes.c_size_t),
         ("n_atoms", ctypes.c_size_t),
         ("positions", ctypes.POINTER(ctypes.c_double)),
+        ("velocities", ctypes.POINTER(ctypes.c_double)),
         ("types", ctypes.POINTER(ctypes.c_int64)),
         ("cells", ctypes.POINTER(ctypes.c_double)),
         ("steps", ctypes.POINTER(ctypes.c_int64)),
@@ -302,6 +303,7 @@ def hbond_geometry_counts(
 
 def sfg_ssvvcf(
     positions: np.ndarray,
+    velocities: np.ndarray | None,
     oxygen_indices: np.ndarray,
     hydrogen_indices: np.ndarray,
     zrefs: np.ndarray,
@@ -324,11 +326,14 @@ def sfg_ssvvcf(
         return None
 
     positions_array = np.ascontiguousarray(positions, dtype=np.float64)
+    velocities_array = None if velocities is None else np.ascontiguousarray(velocities, dtype=np.float64)
     oxygen_array = np.ascontiguousarray(oxygen_indices, dtype=np.int64)
     hydrogen_array = np.ascontiguousarray(hydrogen_indices, dtype=np.int64)
     zref_array = np.ascontiguousarray(zrefs, dtype=np.float64)
     if positions_array.ndim != 3 or positions_array.shape[2] != 3:
         raise ValueError("positions must have shape (n_frames, n_atoms, 3).")
+    if velocities_array is not None and velocities_array.shape != positions_array.shape:
+        raise ValueError("velocities must have the same shape as positions.")
     if oxygen_array.ndim != 1 or hydrogen_array.ndim != 1:
         raise ValueError("oxygen_indices and hydrogen_indices must be one-dimensional.")
     if zref_array.shape != (positions_array.shape[0],):
@@ -357,6 +362,7 @@ def sfg_ssvvcf(
     stage_seconds = np.zeros(4, dtype=np.float64)
     status = lib.waterint_sfg_ssvvcf(
         positions_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+        None if velocities_array is None else velocities_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
         ctypes.c_size_t(positions_array.shape[0]),
         ctypes.c_size_t(positions_array.shape[1]),
         oxygen_array.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
@@ -522,7 +528,7 @@ def read_lammpstrj_file(
     path: str | Path,
     *,
     max_frames: int | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None] | None:
     lib = native_library()
     if lib is None:
         return None
@@ -549,10 +555,15 @@ def read_lammpstrj_file(
         n_frames = int(data.n_frames)
         n_atoms = int(data.n_atoms)
         positions = np.ctypeslib.as_array(data.positions, shape=(n_frames, n_atoms, 3)).copy()
+        velocities = (
+            np.ctypeslib.as_array(data.velocities, shape=(n_frames, n_atoms, 3)).copy()
+            if data.velocities
+            else None
+        )
         types = np.ctypeslib.as_array(data.types, shape=(n_frames, n_atoms)).copy()
         cells = np.ctypeslib.as_array(data.cells, shape=(n_frames, 3)).copy()
         steps = np.ctypeslib.as_array(data.steps, shape=(n_frames,)).copy()
-        return positions, types, cells, steps
+        return positions, types, cells, steps, velocities
     finally:
         lib.waterint_free_lammpstrj_data(ctypes.byref(data))
 
@@ -640,6 +651,7 @@ def native_library() -> ctypes.CDLL | None:
         ]
         lib.waterint_hbond_geometry_counts.restype = ctypes.c_int
         lib.waterint_sfg_ssvvcf.argtypes = [
+            ctypes.POINTER(ctypes.c_double),
             ctypes.POINTER(ctypes.c_double),
             ctypes.c_size_t,
             ctypes.c_size_t,

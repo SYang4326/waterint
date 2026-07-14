@@ -83,7 +83,7 @@ sfg:
   backend: auto   # auto, python, or cpp
 ```
 
-The SFG C++ kernel uses `CutoffNeighborSearch` for O-H assignment and owns finite-difference velocities, continuous O-H segment management, windowed signal construction, and FFT-based segment correlation. Python owns config and trajectory orchestration, z-reference calculation, final normalization, Fourier transformation, plotting, and output. The native route requires fixed atom types and ordering; `auto` uses the Python implementation when that contract is not satisfied.
+The SFG C++ kernel uses `CutoffNeighborSearch` for O-H assignment and owns direct trajectory-velocity ingestion or finite-difference velocities, continuous O-H segment management, windowed signal construction, and FFT-based segment correlation. Python owns config and trajectory orchestration, z-reference calculation, final normalization, Fourier transformation, plotting, and output. The native route requires fixed atom types and ordering; `auto` uses the Python implementation when that contract is not satisfied. LAMMPS readers retain `vx/vy/vz` when all three fields are present, and NPZ conversion preserves them.
 
 The native library is generated on demand under `waterint/_native/`. Normal users can still run without compiling C++ code because `auto` falls back to Python.
 

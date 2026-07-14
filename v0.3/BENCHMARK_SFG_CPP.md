@@ -11,7 +11,7 @@ The trajectory-mode SFG backend keeps the public workflow in Python and moves th
 ```text
 Python NPZ reader and config
   -> Python z-reference and fixed O/H selection
-  -> C++ finite-difference velocities
+  -> C++ trajectory velocities or finite-difference fallback
   -> shared C++ cell-list O-H assignment
   -> C++ continuous O-H segment signals
   -> C++ FFT segment correlation
@@ -27,6 +27,8 @@ sfg:
 ```
 
 `auto` uses C++ when the native library is available and atom types/order are fixed. It otherwise falls back to Python. `cpp` requires the native path, while `python` provides an explicit reference route.
+
+For a LAMMPS dump with `vx vy vz`, set `sfg.velocity_source: trajectory` to use stored velocities directly. The default `auto` uses them when every selected frame provides all three components. Set `sfg.trajectory_velocity_unit: A/fs` for LAMMPS `real` units; the internal SFG velocity convention is `A/ps`. Existing NPZ trajectories without a `velocities` array remain on the finite-difference path.
 
 ## Full 100 ps Benchmark
 
@@ -47,7 +49,7 @@ The rows below are mutually exclusive wall-time stages. `Other overhead` contain
 |---|---:|---:|---:|---:|
 | Read NPZ frames | 1.59 | 2.15 | -0.56 | 0.74x |
 | Reference + O/H selection | 1.95 | 1.96 | -0.01 | 1.00x |
-| Finite-difference velocities | 1.62 | 0.91 | 0.71 | 1.79x |
+| Velocity preparation | 1.62 | 0.91 | 0.71 | 1.79x |
 | O-H assignment | 1144.99 | 8.88 | 1136.11 | 128.99x |
 | Segment signal construction | 560.42 | 1.09 | 559.34 | 516.46x |
 | Segment correlation | 27.77 | 12.88 | 14.89 | 2.16x |

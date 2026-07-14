@@ -17,6 +17,7 @@ def read_npz(path: str | Path, *, type_map: dict | None = None) -> Iterator[Traj
         types = data["types"]
         cells = data["cells"]
         steps = data["steps"]
+        velocities = data["velocities"] if "velocities" in data else None
         shared_symbols = None
         first_types = types[0] if types.shape[0] else None
         if first_types is not None and np.all(types == first_types):
@@ -32,6 +33,7 @@ def read_npz(path: str | Path, *, type_map: dict | None = None) -> Iterator[Traj
                 cell=tuple(float(v) for v in cells[frame_index]),
                 step=int(steps[frame_index]),
                 types=frame_types,
+                velocities=None if velocities is None else velocities[frame_index],
             )
 
 
@@ -62,7 +64,13 @@ def write_npz_from_lammpstrj(
     types = np.stack([frame.types for frame in frames])
     cells = np.asarray([frame.cell for frame in frames], dtype=float)
     steps = np.asarray([frame.step if frame.step is not None else frame.index for frame in frames], dtype=int)
-    np.savez(output, positions=positions, types=types, cells=cells, steps=steps)
+    velocity_frames = [frame.velocities for frame in frames]
+    if any(velocity is not None for velocity in velocity_frames) and not all(velocity is not None for velocity in velocity_frames):
+        raise ValueError("Cannot write an NPZ trajectory with velocities missing from only some frames.")
+    payload = {"positions": positions, "types": types, "cells": cells, "steps": steps}
+    if velocity_frames and velocity_frames[0] is not None:
+        payload["velocities"] = np.stack(velocity_frames)
+    np.savez(output, **payload)
     return output
 
 

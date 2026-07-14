@@ -34,6 +34,7 @@ class SsvvcfResult:
     counts: np.ndarray
     zrefs: np.ndarray
     frames: int
+    velocity_source: str
 
 
 @dataclass
@@ -195,6 +196,7 @@ def compute_ssvvcf_from_frames(
     backend = str(sfg_cfg.get("backend", "auto")).lower()
     if backend not in {"auto", "python", "cpp"}:
         raise ValueError("sfg.backend must be auto, python, or cpp.")
+    trajectory_velocities = trajectory_velocities_from_frames(frames, sfg_cfg=sfg_cfg)
 
     zrefs = zref_series(frames, sfg_cfg, context)
     first = frames[0]
@@ -210,6 +212,7 @@ def compute_ssvvcf_from_frames(
         positions = contiguous_frame_positions(frames)
         native_result = sfg_ssvvcf(
             positions,
+            trajectory_velocities,
             oxygen_indices,
             hydrogen_indices,
             zrefs,
@@ -230,11 +233,18 @@ def compute_ssvvcf_from_frames(
             mask = counts > 0
             corr[mask] = sums[mask] / counts[mask]
             time_ps = np.arange(max_lag + 1, dtype=float) * dt_ps
-            return SsvvcfResult(time_ps=time_ps, corr=corr, counts=counts, zrefs=zrefs, frames=len(frames))
+            return SsvvcfResult(
+                time_ps=time_ps,
+                corr=corr,
+                counts=counts,
+                zrefs=zrefs,
+                frames=len(frames),
+                velocity_source="trajectory" if trajectory_velocities is not None else "finite_difference",
+            )
         if backend == "cpp":
             raise RuntimeError("C++ SFG backend is not available.")
 
-    velocities = finite_difference_velocities(frames, dt_ps=dt_ps, cell=cell, pbc=pbc)
+    velocities, velocity_source = sfg_velocities_from_frames(frames, sfg_cfg=sfg_cfg, cell=cell, pbc=pbc)
     segments = build_sfg_segments_python(
         frames,
         velocities=velocities,
@@ -261,7 +271,14 @@ def compute_ssvvcf_from_frames(
     mask = counts > 0
     corr[mask] = sums[mask] / counts[mask]
     time_ps = np.arange(max_lag + 1, dtype=float) * dt_ps
-    return SsvvcfResult(time_ps=time_ps, corr=corr, counts=counts, zrefs=zrefs, frames=len(frames))
+    return SsvvcfResult(
+        time_ps=time_ps,
+        corr=corr,
+        counts=counts,
+        zrefs=zrefs,
+        frames=len(frames),
+        velocity_source=velocity_source,
+    )
 
 
 def build_sfg_segments_python(
@@ -508,6 +525,54 @@ def finite_difference_velocities(
         else:
             velocities[i] = minimum_image(positions[i + 1] - positions[i - 1], cell=cell, pbc=pbc) / (2.0 * dt_ps)
     return velocities
+
+
+def sfg_velocities_from_frames(
+    frames: list[TrajectoryFrame],
+    *,
+    sfg_cfg: dict[str, Any],
+    cell: tuple[float, float, float],
+    pbc: tuple[bool, bool, bool],
+) -> tuple[np.ndarray, str]:
+    """Return velocities in A/ps from a dump or the finite-difference fallback."""
+
+    trajectory_velocities = trajectory_velocities_from_frames(frames, sfg_cfg=sfg_cfg)
+    if trajectory_velocities is not None:
+        return trajectory_velocities, "trajectory"
+
+    dt_ps = float(sfg_cfg.get("dt_ps", _infer_dt_ps(frames)))
+    return finite_difference_velocities(frames, dt_ps=dt_ps, cell=cell, pbc=pbc), "finite_difference"
+
+
+def trajectory_velocities_from_frames(
+    frames: list[TrajectoryFrame],
+    *,
+    sfg_cfg: dict[str, Any],
+) -> np.ndarray | None:
+    """Return supplied dump velocities in internal A/ps, if selected and complete."""
+
+    source = str(sfg_cfg.get("velocity_source", "auto")).lower()
+    if source not in {"auto", "trajectory", "finite_difference"}:
+        raise ValueError("sfg.velocity_source must be auto, trajectory, or finite_difference.")
+    if source == "finite_difference":
+        return None
+
+    supplied = [frame.velocities for frame in frames]
+    if not all(velocity is not None for velocity in supplied):
+        if source == "trajectory":
+            raise ValueError("sfg.velocity_source: trajectory requires vx, vy, and vz in every trajectory frame.")
+        return None
+
+    velocities = np.ascontiguousarray(np.stack(supplied), dtype=float)
+    position_shape = (len(frames),) + np.asarray(frames[0].positions).shape
+    if velocities.shape != position_shape or not np.isfinite(velocities).all():
+        raise ValueError("Trajectory velocities must be finite arrays with one (atoms, 3) row per frame.")
+    unit = str(sfg_cfg.get("trajectory_velocity_unit", "A/ps")).lower().replace("angstrom", "a")
+    if unit in {"a/ps", "a ps^-1"}:
+        return velocities
+    if unit in {"a/fs", "a fs^-1"}:
+        return velocities * 1000.0
+    raise ValueError("sfg.trajectory_velocity_unit must be A/ps or A/fs.")
 
 
 def assigned_hydrogens_from_neighbors(

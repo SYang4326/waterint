@@ -466,6 +466,8 @@ class WaterIntDesktopApp(tk.Tk):
         elif module == "sfg":
             lines.append("sfg:")
             lines.append("  mode: trajectory")
+            lines.append("  backend: auto")
+            lines.append("  velocity_source: auto")
             lines.append("  hydrogen_symbol: H")
             lines.append("  oxygen_symbol: O")
             lines.append(f"  dt_ps: {self._field('dt_ps')}")

@@ -248,6 +248,7 @@ void accumulate_segment(
 // Compute the trajectory-mode ssVVCF while Python retains config, zref, FT, and output handling.
 extern "C" int waterint_sfg_ssvvcf(
     const double* positions,
+    const double* supplied_velocities,
     std::size_t n_frames,
     std::size_t n_atoms,
     const std::int64_t* oxygen_indices,
@@ -381,30 +382,30 @@ extern "C" int waterint_sfg_ssvvcf(
 
         const auto velocity_start = std::chrono::steady_clock::now();
         for (std::size_t oxygen = 0; oxygen < n_oxygen; ++oxygen) {
-            atom_velocity(
-                positions,
-                n_frames,
-                n_atoms,
-                frame,
-                static_cast<std::size_t>(oxygen_indices[oxygen]),
-                dt_ps,
-                cell_lengths,
-                use_pbc,
-                oxygen_velocities.data() + 3 * oxygen
-            );
+            const std::size_t atom = static_cast<std::size_t>(oxygen_indices[oxygen]);
+            if (supplied_velocities != nullptr) {
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    oxygen_velocities[3 * oxygen + axis] = supplied_velocities[(frame * n_atoms + atom) * 3 + axis];
+                }
+            } else {
+                atom_velocity(
+                    positions, n_frames, n_atoms, frame, atom, dt_ps, cell_lengths, use_pbc,
+                    oxygen_velocities.data() + 3 * oxygen
+                );
+            }
         }
         for (std::size_t hydrogen = 0; hydrogen < n_hydrogen; ++hydrogen) {
-            atom_velocity(
-                positions,
-                n_frames,
-                n_atoms,
-                frame,
-                static_cast<std::size_t>(hydrogen_indices[hydrogen]),
-                dt_ps,
-                cell_lengths,
-                use_pbc,
-                hydrogen_velocities.data() + 3 * hydrogen
-            );
+            const std::size_t atom = static_cast<std::size_t>(hydrogen_indices[hydrogen]);
+            if (supplied_velocities != nullptr) {
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    hydrogen_velocities[3 * hydrogen + axis] = supplied_velocities[(frame * n_atoms + atom) * 3 + axis];
+                }
+            } else {
+                atom_velocity(
+                    positions, n_frames, n_atoms, frame, atom, dt_ps, cell_lengths, use_pbc,
+                    hydrogen_velocities.data() + 3 * hydrogen
+                );
+            }
         }
         const auto velocity_end = std::chrono::steady_clock::now();
         stage_seconds[1] += std::chrono::duration<double>(velocity_end - velocity_start).count();

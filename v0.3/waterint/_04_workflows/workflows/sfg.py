@@ -212,14 +212,18 @@ def run_trajectory(config: dict[str, Any], sfg_cfg: dict[str, Any], output_cfg: 
         png_paths,
         outdir / f"{prefix}_metadata.json",
     )
-    write_sfg_metadata(result.metadata_path, config=config, result=result)
+    write_sfg_metadata(result.metadata_path, config=config, result=result, velocity_source=calc.velocity_source)
     return result
 
 
-def write_sfg_metadata(path: Path, *, config: dict[str, Any], result: SfgResult) -> None:
-    write_metadata(
-        path,
-        {
+def write_sfg_metadata(
+    path: Path,
+    *,
+    config: dict[str, Any],
+    result: SfgResult,
+    velocity_source: str | None = None,
+) -> None:
+    metadata = {
             "analysis_name": "sfg",
             "package": "waterint",
             "mode": result.mode,
@@ -230,8 +234,10 @@ def write_sfg_metadata(path: Path, *, config: dict[str, Any], result: SfgResult)
                 "png": {label: str(path) for label, path in result.png_paths.items()},
             },
             "config": {key: value for key, value in config.items() if not key.startswith("_")},
-        },
-    )
+    }
+    if velocity_source is not None:
+        metadata["velocity_source"] = velocity_source
+    write_metadata(path, metadata)
 
 
 def overall_path(outdir: Path, prefix: str, bin_label: str, run: str) -> Path:

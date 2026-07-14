@@ -311,6 +311,7 @@ def sfg_ssvvcf(
     dt_ps: float,
     max_lag: int,
     oh_cutoff: float,
+    oh_assignment: str,
     cell: tuple[float, float, float],
     pbc: tuple[bool, bool, bool],
     mu_mode: str,
@@ -340,6 +341,9 @@ def sfg_ssvvcf(
         raise ValueError("zrefs must contain one value per frame.")
     if dt_ps <= 0.0 or max_lag < 1 or oh_cutoff <= 0.0:
         raise ValueError("dt_ps, max_lag, and oh_cutoff must be positive.")
+    assignment = str(oh_assignment).lower()
+    if assignment not in {"cutoff", "nearest_oxygen"}:
+        raise ValueError("sfg.oh_assignment must be cutoff or nearest_oxygen.")
 
     mode = str(mu_mode).lower()
     if mode not in {"full", "stretch"}:
@@ -373,6 +377,7 @@ def sfg_ssvvcf(
         ctypes.c_double(float(dt_ps)),
         ctypes.c_size_t(int(max_lag)),
         ctypes.c_double(float(oh_cutoff)),
+        ctypes.c_int(1 if assignment == "nearest_oxygen" else 0),
         cell_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
         pbc_array.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
         ctypes.c_int(1 if mode == "stretch" else 0),
@@ -663,6 +668,7 @@ def native_library() -> ctypes.CDLL | None:
             ctypes.c_double,
             ctypes.c_size_t,
             ctypes.c_double,
+            ctypes.c_int,
             ctypes.POINTER(ctypes.c_double),
             ctypes.POINTER(ctypes.c_uint8),
             ctypes.c_int,

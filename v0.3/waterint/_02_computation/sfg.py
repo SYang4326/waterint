@@ -11,6 +11,7 @@ from scipy.fftpack import dct
 from waterint.chemistry import oxygen_hydrogen_neighbors_by_species
 from waterint._02_computation._native import sfg_ssvvcf
 from waterint._00_io.common import TrajectoryFrame
+from waterint._01_core.coordinates import fixed_reference_value, slab_surface_reference
 from waterint._01_core.selection import SelectionContext, element_indices, element_mask
 
 
@@ -185,6 +186,9 @@ def compute_ssvvcf_from_frames(
     hydrogen_symbol = str(sfg_cfg.get("hydrogen_symbol", "H"))
     oxygen_symbol = str(sfg_cfg.get("oxygen_symbol", "O"))
     oh_cutoff = float(sfg_cfg.get("oh_cutoff", sfg_cfg.get("bond_cutoff", 1.25)))
+    oh_assignment = str(sfg_cfg.get("oh_assignment", "cutoff")).lower()
+    if oh_assignment not in {"cutoff", "nearest_oxygen"}:
+        raise ValueError("sfg.oh_assignment must be cutoff or nearest_oxygen.")
     neighbor_method = str(sfg_cfg.get("neighbor_method", "auto"))
     neighbor_workers = int(sfg_cfg.get("neighbor_workers", 1))
     oxygen_chunk_size = int(sfg_cfg.get("oxygen_chunk_size", 2048))
@@ -219,12 +223,17 @@ def compute_ssvvcf_from_frames(
             dt_ps=dt_ps,
             max_lag=max_lag,
             oh_cutoff=oh_cutoff,
+            oh_assignment=oh_assignment,
             cell=cell,
             pbc=pbc,
             mu_mode=mu_mode,
             symmetrize=symmetrize,
             flip_sign=flip_sign,
-            duplicate_policy=str(sfg_cfg.get("duplicate_hydrogen_policy", "nearest")),
+            duplicate_policy=(
+                "nearest"
+                if oh_assignment == "nearest_oxygen"
+                else str(sfg_cfg.get("duplicate_hydrogen_policy", "nearest"))
+            ),
             window=sfg_cfg.get("window"),
         )
         if native_result is not None:
@@ -256,6 +265,7 @@ def compute_ssvvcf_from_frames(
         oxygen_symbol=oxygen_symbol,
         hydrogen_symbol=hydrogen_symbol,
         oh_cutoff=oh_cutoff,
+        oh_assignment=oh_assignment,
         neighbor_method=neighbor_method,
         neighbor_workers=neighbor_workers,
         oxygen_chunk_size=oxygen_chunk_size,
@@ -293,6 +303,7 @@ def build_sfg_segments_python(
     oxygen_symbol: str,
     hydrogen_symbol: str,
     oh_cutoff: float,
+    oh_assignment: str,
     neighbor_method: str,
     neighbor_workers: int,
     oxygen_chunk_size: int,
@@ -315,10 +326,15 @@ def build_sfg_segments_python(
             oxygen_symbol=oxygen_symbol,
             hydrogen_symbol=hydrogen_symbol,
             oh_cutoff=oh_cutoff,
+            oh_assignment=oh_assignment,
             neighbor_method=neighbor_method,
             neighbor_workers=neighbor_workers,
             oxygen_chunk_size=oxygen_chunk_size,
-            duplicate_policy=str(sfg_cfg.get("duplicate_hydrogen_policy", "nearest")),
+            duplicate_policy=(
+                "nearest"
+                if oh_assignment == "nearest_oxygen"
+                else str(sfg_cfg.get("duplicate_hydrogen_policy", "nearest"))
+            ),
         )
         if stage_timings is not None:
             stage_timings["O-H assignment"] += time.perf_counter() - assignment_start
@@ -354,12 +370,13 @@ def assign_sfg_hydrogens_for_frame(
     oxygen_symbol: str,
     hydrogen_symbol: str,
     oh_cutoff: float,
+    oh_assignment: str,
     neighbor_method: str,
     neighbor_workers: int,
     oxygen_chunk_size: int,
     duplicate_policy: str,
 ) -> dict[int, int]:
-    """Assign each in-cutoff hydrogen to one oxygen for a trajectory frame."""
+    """Assign H to O atoms with an optional no-cutoff nearest-O fallback."""
 
     oxygen_indices = element_indices(frame, {oxygen_symbol}, context)
     hydrogen_indices = element_indices(frame, {hydrogen_symbol}, context)
@@ -377,13 +394,23 @@ def assign_sfg_hydrogens_for_frame(
         cell=cell,
         pbc=pbc,
     )
-    return assigned_hydrogens_from_neighbors(
+    assigned = assigned_hydrogens_from_neighbors(
         neighbors_by_species,
         positions=frame.positions,
         cell=cell,
         pbc=pbc,
         duplicate_policy=duplicate_policy,
     )
+    if oh_assignment == "nearest_oxygen":
+        assigned = assign_unmatched_hydrogens_to_nearest_oxygen(
+            assigned,
+            oxygen_indices=oxygen_indices,
+            hydrogen_indices=hydrogen_indices,
+            positions=frame.positions,
+            cell=cell,
+            pbc=pbc,
+        )
+    return assigned
 
 
 def append_sfg_frame_signals(
@@ -608,6 +635,29 @@ def assigned_hydrogens_from_neighbors(
     return {hydrogen_index: oxygen_index for hydrogen_index, (oxygen_index, _distance2) in assigned.items()}
 
 
+def assign_unmatched_hydrogens_to_nearest_oxygen(
+    assigned: dict[int, int],
+    *,
+    oxygen_indices: np.ndarray,
+    hydrogen_indices: np.ndarray,
+    positions: np.ndarray,
+    cell: tuple[float, float, float],
+    pbc: tuple[bool, bool, bool],
+) -> dict[int, int]:
+    """Give every remaining H its nearest O without imposing an O-H cutoff."""
+
+    for hydrogen_index in hydrogen_indices:
+        hydrogen_index = int(hydrogen_index)
+        if hydrogen_index in assigned:
+            continue
+        vectors = minimum_image(
+            positions[hydrogen_index] - positions[oxygen_indices], cell=cell, pbc=pbc
+        )
+        nearest_local = int(np.argmin(np.einsum("ij,ij->i", vectors, vectors)))
+        assigned[hydrogen_index] = int(oxygen_indices[nearest_local])
+    return assigned
+
+
 def accumulate_segment(
     segment: _Segment,
     *,
@@ -647,24 +697,15 @@ def zref_series(frames: list[TrajectoryFrame], sfg_cfg: dict[str, Any], context:
         return np.asarray(values[: len(frames)], dtype=float)
 
     reference_cfg = sfg_cfg.get("reference", {})
-    if isinstance(reference_cfg, dict) and reference_cfg.get("species"):
-        species = {str(item) for item in reference_cfg["species"]}
-        surface = str(reference_cfg.get("surface", "mean")).lower()
-        values = []
-        for frame in frames:
-            mask = element_mask(frame, species, context)
-            z = frame.positions[mask, 2]
-            if z.size == 0:
-                raise ValueError(f"SFG reference selection found no atoms: {species}")
-            if surface == "max":
-                values.append(float(np.max(z)))
-            elif surface == "min":
-                values.append(float(np.min(z)))
-            elif surface == "mean":
-                values.append(float(np.mean(z)))
-            else:
-                raise ValueError("sfg.reference.surface must be max, min, or mean.")
-        return np.asarray(values, dtype=float)
+    if isinstance(reference_cfg, dict):
+        fixed = fixed_reference_value(reference_cfg)
+        if fixed is not None:
+            return np.full(len(frames), fixed, dtype=float)
+        if reference_cfg.get("species"):
+            return np.asarray(
+                [slab_surface_reference(frame, 2, 1.0, reference_cfg, context) for frame in frames],
+                dtype=float,
+            )
 
     return np.full(len(frames), float(sfg_cfg.get("z_ref0", 0.0)), dtype=float)
 

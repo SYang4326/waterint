@@ -2,17 +2,17 @@
   "analysis_name": "sfg",
   "package": "waterint",
   "mode": "trajectory",
-  "config_file": "v0.3/example/mgo_sfg/config_100ps_npz_full.yaml",
+  "config_file": "/Users/mapple/Desktop/LifeOS/20_projects/waterint/v0.3/example/mgo_sfg/config_100ps_npz_full.yaml",
   "outputs": {
     "cf": {
-      "ssvvcf": "v0.3/example/mgo_sfg/output/mgo_100ps_sfg_full.dat",
-      "zref": "v0.3/example/mgo_sfg/output/mgo_100ps_sfg_full_zref.dat"
+      "ssvvcf": "/Users/mapple/Desktop/LifeOS/20_projects/waterint/v0.3/example/mgo_sfg/output/mgo_100ps_sfg_full.dat",
+      "zref": "/Users/mapple/Desktop/LifeOS/20_projects/waterint/v0.3/example/mgo_sfg/output/mgo_100ps_sfg_full_zref.dat"
     },
     "ft": {
-      "spectrum": "v0.3/example/mgo_sfg/output/mgo_100ps_sfg_full_FT.dat"
+      "spectrum": "/Users/mapple/Desktop/LifeOS/20_projects/waterint/v0.3/example/mgo_sfg/output/mgo_100ps_sfg_full_FT.dat"
     },
     "png": {
-      "spectrum": "v0.3/example/mgo_sfg/output/mgo_100ps_sfg_full_FT.png"
+      "spectrum": "/Users/mapple/Desktop/LifeOS/20_projects/waterint/v0.3/example/mgo_sfg/output/mgo_100ps_sfg_full_FT.png"
     }
   },
   "config": {
@@ -33,8 +33,10 @@
     "sfg": {
       "mode": "trajectory",
       "backend": "auto",
+      "velocity_source": "auto",
       "hydrogen_symbol": "H",
       "oxygen_symbol": "O",
+      "oh_assignment": "nearest_oxygen",
       "oh_cutoff": 1.25,
       "duplicate_hydrogen_policy": "nearest",
       "dt_ps": 0.005,
@@ -45,10 +47,12 @@
         false
       ],
       "reference": {
+        "type": "top_layer_mean",
         "species": [
           "Mg"
         ],
-        "surface": "max"
+        "surface": "max",
+        "layer_width": 0.7
       },
       "window": {
         "mode": 1,
@@ -71,5 +75,6 @@
       "flip": true,
       "title": "MgO-water SFG, 100 ps"
     }
-  }
+  },
+  "velocity_source": "finite_difference"
 }

@@ -170,6 +170,50 @@ class V03SfgCppTests(unittest.TestCase):
                 context=context,
             )
 
+    def test_nearest_oxygen_assigns_hydrogen_outside_cutoff_in_both_backends(self):
+        sfg = importlib.import_module("waterint._02_computation.sfg")
+        native = importlib.import_module("waterint._02_computation._native")
+        if not native.native_status()["available"]:
+            self.skipTest("C++ compiler or native backend is not available.")
+        frames, context = self._out_of_cutoff_frames()
+
+        cutoff_config = self._config(backend="python", window=None)
+        cutoff_config.update({"oh_cutoff": 1.25, "oh_assignment": "cutoff", "symmetrize": False})
+        cutoff_result = sfg.compute_ssvvcf_from_frames(
+            frames, cell=(10.0, 10.0, 10.0), sfg_cfg=cutoff_config, context=context
+        )
+        self.assertEqual(int(cutoff_result.counts[0]), 0)
+
+        results = {}
+        for backend in ["python", "cpp"]:
+            config = self._config(backend=backend, window=None)
+            config.update({"oh_cutoff": 1.25, "oh_assignment": "nearest_oxygen", "symmetrize": False})
+            results[backend] = sfg.compute_ssvvcf_from_frames(
+                frames, cell=(10.0, 10.0, 10.0), sfg_cfg=config, context=context
+            )
+        self.assertGreater(int(results["python"].counts[0]), 0)
+        self._assert_results_equal(results["python"], results["cpp"])
+
+    def test_top_layer_mean_reference_averages_surface_layer(self):
+        sfg = importlib.import_module("waterint._02_computation.sfg")
+        common = importlib.import_module("waterint._00_io.common")
+        selection = importlib.import_module("waterint._01_core.selection")
+        frame = common.TrajectoryFrame(
+            index=0,
+            comment="Mg slab",
+            symbols=["Mg", "Mg", "Mg"],
+            positions=np.asarray([[0.0, 0.0, 10.0], [0.0, 0.0, 9.6], [0.0, 0.0, 5.0]]),
+            cell=(10.0, 10.0, 12.0),
+            types=np.asarray([2, 2, 2], dtype=int),
+        )
+        context = selection.SelectionContext.from_input_config({"type_map": {2: "Mg"}})
+        zrefs = sfg.zref_series(
+            [frame],
+            {"reference": {"type": "top_layer_mean", "species": ["Mg"], "surface": "max", "layer_width": 0.7}},
+            context,
+        )
+        np.testing.assert_allclose(zrefs, [9.8])
+
     def _run_both(self, *, mu_mode, symmetrize, flip_sign, window):
         sfg = importlib.import_module("waterint._02_computation.sfg")
         native = importlib.import_module("waterint._02_computation._native")
@@ -269,6 +313,27 @@ class V03SfgCppTests(unittest.TestCase):
                 types=types,
             )
             for index in range(3)
+        ]
+        return frames, selection.SelectionContext.from_input_config({"type_map": {1: "H", 3: "O"}})
+
+    @staticmethod
+    def _out_of_cutoff_frames():
+        common = importlib.import_module("waterint._00_io.common")
+        selection = importlib.import_module("waterint._01_core.selection")
+        symbols = ["O", "O", "H"]
+        types = np.asarray([3, 3, 1], dtype=int)
+        positions = np.asarray([[0.0, 0.0, 0.0], [5.0, 0.0, 0.0], [1.6, 0.0, 0.0]])
+        frames = [
+            common.TrajectoryFrame(
+                index=index,
+                comment=f"frame {index}",
+                symbols=symbols,
+                positions=positions.copy(),
+                cell=(10.0, 10.0, 10.0),
+                step=index,
+                types=types,
+            )
+            for index in range(4)
         ]
         return frames, selection.SelectionContext.from_input_config({"type_map": {1: "H", 3: "O"}})
 

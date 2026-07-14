@@ -93,8 +93,10 @@ def slab_surface_reference(
     context: SelectionContext,
 ) -> float:
     ref_type = str(reference_cfg.get("type", "slab_surface"))
-    if ref_type not in {"slab_surface", "element_surface"}:
-        raise ValueError("relative_to_slab requires reference.type: slab_surface or fixed.")
+    if ref_type not in {"slab_surface", "element_surface", "top_layer_mean"}:
+        raise ValueError(
+            "relative_to_slab requires reference.type: slab_surface, top_layer_mean, or fixed."
+        )
     species = _species_list(reference_cfg, "reference.species")
     mask = element_mask(frame, set(species), context)
     values = frame.positions[mask, axis]
@@ -105,10 +107,16 @@ def slab_surface_reference(
     if surface == "auto":
         surface = "max" if axis_sign > 0 else "min"
     if surface == "max":
+        if ref_type == "top_layer_mean":
+            return _surface_layer_mean(values, surface="max", reference_cfg=reference_cfg)
         return float(np.max(values))
     if surface == "min":
+        if ref_type == "top_layer_mean":
+            return _surface_layer_mean(values, surface="min", reference_cfg=reference_cfg)
         return float(np.min(values))
     if surface == "mean":
+        if ref_type == "top_layer_mean":
+            raise ValueError("reference.type: top_layer_mean requires surface: max or min.")
         return float(np.mean(values))
     raise ValueError("reference.surface must be auto, max, min, or mean.")
 
@@ -120,6 +128,22 @@ def fixed_reference_value(reference_cfg: dict[str, Any]) -> float | None:
     if "value" not in reference_cfg:
         raise ValueError("reference.value is required when reference.type is fixed.")
     return float(reference_cfg["value"])
+
+
+def _surface_layer_mean(
+    values: np.ndarray,
+    *,
+    surface: str,
+    reference_cfg: dict[str, Any],
+) -> float:
+    """Average selected slab atoms within one configured surface-layer thickness."""
+
+    layer_width = float(reference_cfg.get("layer_width", reference_cfg.get("layer_width_A", 0.7)))
+    if layer_width <= 0:
+        raise ValueError("reference.layer_width must be positive for top_layer_mean.")
+    edge = float(np.max(values) if surface == "max" else np.min(values))
+    mask = values >= edge - layer_width if surface == "max" else values <= edge + layer_width
+    return float(np.mean(values[mask]))
 
 
 def _species_list(config: dict[str, Any], name: str) -> list[str]:

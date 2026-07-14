@@ -259,6 +259,7 @@ extern "C" int waterint_sfg_ssvvcf(
     double dt_ps,
     std::size_t max_lag,
     double oh_cutoff,
+    int nearest_oxygen_assignment,
     const double* cell,
     const std::uint8_t* pbc,
     int mu_mode,
@@ -278,7 +279,8 @@ extern "C" int waterint_sfg_ssvvcf(
     if (
         positions == nullptr || oxygen_indices == nullptr || hydrogen_indices == nullptr || zrefs == nullptr ||
         sums == nullptr || counts == nullptr || stage_seconds == nullptr || n_frames < 3 || n_atoms == 0 || n_oxygen == 0 ||
-        n_hydrogen == 0 || dt_ps <= 0.0 || oh_cutoff <= 0.0 || (mu_mode != 0 && mu_mode != 1) ||
+        n_hydrogen == 0 || dt_ps <= 0.0 || oh_cutoff <= 0.0 ||
+        (nearest_oxygen_assignment != 0 && nearest_oxygen_assignment != 1) || (mu_mode != 0 && mu_mode != 1) ||
         (duplicate_policy != 0 && duplicate_policy != 1) ||
         (window_enabled != 0 && window_mode != 1 && window_mode != 2)
     ) {
@@ -375,6 +377,23 @@ extern "C" int waterint_sfg_ssvvcf(
         if (duplicate_policy == 1) {
             for (std::size_t hydrogen = 0; hydrogen < n_hydrogen; ++hydrogen) {
                 if (assignment_count[hydrogen] > 1) return 4;
+            }
+        }
+        // Preserve the fast cell-list path; only H atoms without an in-cutoff O
+        // need the exact all-O fallback requested by nearest_oxygen assignment.
+        if (nearest_oxygen_assignment != 0) {
+            for (std::size_t hydrogen = 0; hydrogen < n_hydrogen; ++hydrogen) {
+                if (assigned_oxygen[hydrogen] >= 0) continue;
+                for (std::size_t oxygen = 0; oxygen < n_oxygen; ++oxygen) {
+                    const double distance2 = oh_distance2(
+                        oxygen_positions.data(), oxygen, hydrogen_positions.data(), hydrogen,
+                        cell_lengths, use_pbc
+                    );
+                    if (distance2 < assigned_distance2[hydrogen]) {
+                        assigned_oxygen[hydrogen] = static_cast<std::int64_t>(oxygen);
+                        assigned_distance2[hydrogen] = distance2;
+                    }
+                }
             }
         }
         const auto assignment_end = std::chrono::steady_clock::now();

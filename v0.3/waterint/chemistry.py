@@ -6,6 +6,7 @@ import numpy as np
 
 from waterint._01_core.cell import minimum_image as cell_minimum_image
 from waterint._02_computation._native import classify_oxygen_by_h_count_compact
+from waterint._02_computation._native import classify_oxygen_by_h_count_nearest
 from waterint._02_computation._native import count_hydrogen_neighbors
 
 
@@ -223,6 +224,20 @@ def classify_oxygen_by_h_count(
     if assignment == "nearest":
         oxygen_positions = positions[oxygen_indices]
         hydrogen_positions = positions[hydrogen_indices]
+        if method in {"auto", "cpp"}:
+            native_classified = _classify_oxygen_by_h_count_nearest(
+                oxygen_positions=oxygen_positions,
+                hydrogen_positions=hydrogen_positions,
+                oxygen_indices=oxygen_indices,
+                cutoff=oh_cutoff,
+                cell=cell,
+                cell_vectors=cell_vectors,
+                pbc=pbc,
+            )
+            if native_classified is not None:
+                return native_classified
+            if method == "cpp":
+                raise RuntimeError("C++ nearest oxygen species classification backend is not available.")
         h_counts = _count_hydrogen_neighbors_unique(
             oxygen_positions=oxygen_positions,
             hydrogen_positions=hydrogen_positions,
@@ -297,6 +312,37 @@ def _classify_oxygen_by_h_count_compact(
         oxygen_indices,
         cutoff=cutoff,
         cell=cell,
+        pbc=pbc,
+    )
+    if native_result is None:
+        return None
+    label_counts, grouped_indices = native_result
+    return {
+        "O2-": grouped_indices[0, : label_counts[0]].copy(),
+        "OH-": grouped_indices[1, : label_counts[1]].copy(),
+        "H2O": grouped_indices[2, : label_counts[2]].copy(),
+        "H3O+": grouped_indices[3, : label_counts[3]].copy(),
+        "O_other": grouped_indices[4, : label_counts[4]].copy(),
+    }
+
+
+def _classify_oxygen_by_h_count_nearest(
+    *,
+    oxygen_positions: np.ndarray,
+    hydrogen_positions: np.ndarray,
+    oxygen_indices: np.ndarray,
+    cutoff: float,
+    cell: tuple[float, float, float] | None,
+    cell_vectors: np.ndarray | None,
+    pbc: tuple[bool, bool, bool] | None,
+) -> dict[str, np.ndarray] | None:
+    native_result = classify_oxygen_by_h_count_nearest(
+        oxygen_positions,
+        hydrogen_positions,
+        oxygen_indices,
+        cutoff=cutoff,
+        cell=cell,
+        cell_vectors=cell_vectors,
         pbc=pbc,
     )
     if native_result is None:

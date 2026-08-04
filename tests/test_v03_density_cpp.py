@@ -279,6 +279,66 @@ ITEM: ATOMS id type x y z
             np.asarray([[10.0, 0.0, 0.0], [4.0, 10.0, 0.0], [0.0, 0.0, 10.0]]),
         )
 
+    def test_cpp_lammpstrj_reader_reconstructs_triclinic_cell(self):
+        lammpstrj = importlib.import_module("waterint._00_io.lammpstrj")
+
+        content = """ITEM: TIMESTEP
+0
+ITEM: NUMBER OF ATOMS
+2
+ITEM: BOX BOUNDS xy xz yz pp pp pp
+0 14 4
+0 10 0
+0 10 0
+ITEM: ATOMS id type x y z
+1 3 9.7 0.0 0.0
+2 1 0.2 0.0 0.0
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "triclinic.lammpstrj"
+            path.write_text(content, encoding="utf-8")
+            frame = next(lammpstrj.read_lammpstrj(path, type_map={1: "H", 3: "O"}, reader="cpp"))
+
+        self.assertTrue(frame.triclinic)
+        self.assertEqual(frame.cell, (10.0, 10.0, 10.0))
+        np.testing.assert_allclose(
+            frame.cell_vectors,
+            np.asarray([[10.0, 0.0, 0.0], [4.0, 10.0, 0.0], [0.0, 0.0, 10.0]]),
+        )
+        self.assertEqual(frame.cell_origin, (0.0, 0.0, 0.0))
+
+    def test_cpp_lammpstrj_reader_filters_start_stride_and_max_frames(self):
+        lammpstrj = importlib.import_module("waterint._00_io.lammpstrj")
+
+        frame_template = """ITEM: TIMESTEP
+{step}
+ITEM: NUMBER OF ATOMS
+1
+ITEM: BOX BOUNDS pp pp pp
+0 10
+0 10
+0 10
+ITEM: ATOMS id type x y z
+1 3 {x} 0.0 0.0
+"""
+        content = "".join(frame_template.format(step=step, x=i) for i, step in enumerate([0, 100, 200, 300, 400]))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "filter.lammpstrj"
+            path.write_text(content, encoding="utf-8")
+            frames = list(
+                lammpstrj.read_lammpstrj(
+                    path,
+                    type_map={3: "O"},
+                    reader="cpp",
+                    start_timestep=100,
+                    stride=2,
+                    max_frames=2,
+                )
+            )
+
+        self.assertEqual([frame.step for frame in frames], [200, 400])
+        np.testing.assert_allclose([frame.positions[0, 0] for frame in frames], [2.0, 4.0])
+
     def test_oxygen_species_uses_triclinic_minimum_image(self):
         common = importlib.import_module("waterint._00_io.common")
         selection = importlib.import_module("waterint._01_core.selection")
@@ -311,6 +371,27 @@ ITEM: ATOMS id type x y z
 
         np.testing.assert_array_equal(classified["OH-"], np.empty(0, dtype=int))
         np.testing.assert_array_equal(classified["H2O"], np.asarray([0]))
+
+    def test_cpp_oxygen_species_nearest_uses_triclinic_minimum_image(self):
+        chemistry = importlib.import_module("waterint.chemistry")
+
+        kwargs = {
+            "symbols": ["O", "H", "H"],
+            "positions": np.asarray([[9.7, 0.0, 0.0], [0.2, 0.0, 0.0], [9.1, 0.0, 0.0]], dtype=float),
+            "oxygen_symbol": "O",
+            "hydrogen_symbol": "H",
+            "oh_cutoff": 1.0,
+            "hydrogen_assignment": "nearest",
+            "cell": (10.0, 10.0, 10.0),
+            "cell_vectors": np.asarray([[10.0, 0.0, 0.0], [4.0, 10.0, 0.0], [0.0, 0.0, 10.0]]),
+            "pbc": (True, False, False),
+        }
+        cpp = chemistry.classify_oxygen_by_h_count(neighbor_method="cpp", **kwargs)
+        matrix = chemistry.classify_oxygen_by_h_count(neighbor_method="matrix", **kwargs)
+
+        for label in ["O2-", "OH-", "H2O", "H3O+", "O_other"]:
+            np.testing.assert_array_equal(cpp[label], matrix[label])
+        np.testing.assert_array_equal(cpp["H2O"], np.asarray([0]))
 
     def test_oxygen_species_assigns_shared_h_to_nearest_oxygen(self):
         common = importlib.import_module("waterint._00_io.common")

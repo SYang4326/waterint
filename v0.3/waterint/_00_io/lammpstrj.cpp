@@ -6,6 +6,7 @@
 #include <cstring>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -19,6 +20,9 @@ struct WaterintLammpstrjData {
     double* velocities;
     std::int64_t* types;
     double* cells;
+    double* cell_vectors;
+    double* cell_origins;
+    std::uint8_t* triclinic;
     std::int64_t* steps;
     char* error;
 };
@@ -100,6 +104,24 @@ bool parse_bounds(const std::string& line, double* lo, double* hi) {
     return true;
 }
 
+bool parse_bounds_with_tilt(const std::string& line, double* lo, double* hi, double* tilt) {
+    char* end = nullptr;
+    errno = 0;
+    *lo = std::strtod(line.c_str(), &end);
+    if (errno != 0 || end == line.c_str()) {
+        return false;
+    }
+    *hi = std::strtod(end, &end);
+    if (errno != 0) {
+        return false;
+    }
+    *tilt = std::strtod(end, &end);
+    if (errno != 0) {
+        return false;
+    }
+    return true;
+}
+
 std::vector<std::string> split_words(const std::string& line) {
     std::istringstream stream(line);
     std::vector<std::string> words;
@@ -117,6 +139,19 @@ int column_index(const std::vector<std::string>& columns, const std::string& nam
         }
     }
     return -1;
+}
+
+bool is_triclinic_box_header(const std::string& line) {
+    const std::vector<std::string> words = split_words(line);
+    if (words.size() > 6) {
+        return true;
+    }
+    for (std::size_t i = 3; i < words.size(); ++i) {
+        if (words[i] == "xy" || words[i] == "xz" || words[i] == "yz") {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool parse_atom_row(
@@ -206,12 +241,18 @@ bool parse_atom_row(
 extern "C" int waterint_read_lammpstrj_file(
     const char* path,
     std::size_t max_frames,
+    int has_start_timestep,
+    std::int64_t start_timestep,
+    std::size_t stride,
     WaterintLammpstrjData* out
 ) {
     if (path == nullptr || out == nullptr) {
         return 1;
     }
-    *out = WaterintLammpstrjData{0, 0, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+    if (stride == 0) {
+        return 1;
+    }
+    *out = WaterintLammpstrjData{0, 0, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
 
     FILE* handle = std::fopen(path, "rb");
     if (handle == nullptr) {
@@ -226,9 +267,13 @@ extern "C" int waterint_read_lammpstrj_file(
     std::vector<double> velocities;
     std::vector<std::int64_t> types;
     std::vector<double> cells;
+    std::vector<double> cell_vectors;
+    std::vector<double> cell_origins;
+    std::vector<std::uint8_t> triclinic_flags;
     std::vector<std::int64_t> steps;
     bool velocity_layout_known = false;
     bool trajectory_has_velocities = false;
+    std::size_t frame_index = 0;
 
     while (max_frames == 0 || n_frames < max_frames) {
         if (!read_line(handle, line)) {
@@ -278,6 +323,9 @@ extern "C" int waterint_read_lammpstrj_file(
             velocities.reserve(reserve_frames * n_atoms * 3);
             types.reserve(reserve_frames * n_atoms);
             cells.reserve(reserve_frames * 3);
+            cell_vectors.reserve(reserve_frames * 9);
+            cell_origins.reserve(reserve_frames * 3);
+            triclinic_flags.reserve(reserve_frames);
             steps.reserve(reserve_frames);
         } else if (frame_atoms != n_atoms) {
             std::fclose(handle);
@@ -285,26 +333,89 @@ extern "C" int waterint_read_lammpstrj_file(
             return 9;
         }
 
+        const bool should_yield =
+            (has_start_timestep == 0 || timestep >= start_timestep) &&
+            (frame_index % stride == 0);
+
         if (!read_line(handle, line) || !starts_with(line, "ITEM: BOX BOUNDS")) {
             std::fclose(handle);
             set_error(out, "Expected ITEM: BOX BOUNDS.");
             return 10;
         }
+        const bool triclinic = is_triclinic_box_header(line);
         double cell_lengths[3] = {0.0, 0.0, 0.0};
-        for (std::size_t axis = 0; axis < 3; ++axis) {
-            if (!read_line(handle, line)) {
+        double origin[3] = {0.0, 0.0, 0.0};
+        double vectors[9] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+        if (triclinic) {
+            double xlo_bound = 0.0;
+            double xhi_bound = 0.0;
+            double ylo_bound = 0.0;
+            double yhi_bound = 0.0;
+            double zlo_bound = 0.0;
+            double zhi_bound = 0.0;
+            double xy = 0.0;
+            double xz = 0.0;
+            double yz = 0.0;
+            if (
+                !read_line(handle, line) || !parse_bounds_with_tilt(line, &xlo_bound, &xhi_bound, &xy) ||
+                !read_line(handle, line) || !parse_bounds_with_tilt(line, &ylo_bound, &yhi_bound, &xz) ||
+                !read_line(handle, line) || !parse_bounds_with_tilt(line, &zlo_bound, &zhi_bound, &yz)
+            ) {
                 std::fclose(handle);
-                set_error(out, "Unexpected EOF inside BOX BOUNDS.");
-                return 11;
-            }
-            double lo = 0.0;
-            double hi = 0.0;
-            if (!parse_bounds(line, &lo, &hi)) {
-                std::fclose(handle);
-                set_error(out, "Bad BOX BOUNDS row.");
+                set_error(out, "Bad triclinic BOX BOUNDS rows.");
                 return 12;
             }
-            cell_lengths[axis] = hi - lo;
+            const double xlo = xlo_bound - std::min({0.0, xy, xz, xy + xz});
+            const double xhi = xhi_bound - std::max({0.0, xy, xz, xy + xz});
+            const double ylo = ylo_bound - std::min(0.0, yz);
+            const double yhi = yhi_bound - std::max(0.0, yz);
+            const double zlo = zlo_bound;
+            const double zhi = zhi_bound;
+            cell_lengths[0] = xhi - xlo;
+            cell_lengths[1] = yhi - ylo;
+            cell_lengths[2] = zhi - zlo;
+            if (cell_lengths[0] <= 0.0 || cell_lengths[1] <= 0.0 || cell_lengths[2] <= 0.0) {
+                std::fclose(handle);
+                set_error(out, "Bad triclinic BOX BOUNDS lengths.");
+                return 12;
+            }
+            origin[0] = xlo;
+            origin[1] = ylo;
+            origin[2] = zlo;
+            vectors[0] = cell_lengths[0];
+            vectors[1] = 0.0;
+            vectors[2] = 0.0;
+            vectors[3] = xy;
+            vectors[4] = cell_lengths[1];
+            vectors[5] = 0.0;
+            vectors[6] = xz;
+            vectors[7] = yz;
+            vectors[8] = cell_lengths[2];
+        } else {
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                if (!read_line(handle, line)) {
+                    std::fclose(handle);
+                    set_error(out, "Unexpected EOF inside BOX BOUNDS.");
+                    return 11;
+                }
+                double lo = 0.0;
+                double hi = 0.0;
+                if (!parse_bounds(line, &lo, &hi)) {
+                    std::fclose(handle);
+                    set_error(out, "Bad BOX BOUNDS row.");
+                    return 12;
+                }
+                origin[axis] = lo;
+                cell_lengths[axis] = hi - lo;
+                if (cell_lengths[axis] <= 0.0) {
+                    std::fclose(handle);
+                    set_error(out, "Bad BOX BOUNDS length.");
+                    return 12;
+                }
+            }
+            vectors[0] = cell_lengths[0];
+            vectors[4] = cell_lengths[1];
+            vectors[8] = cell_lengths[2];
         }
 
         if (!read_line(handle, line) || !starts_with(line, "ITEM: ATOMS")) {
@@ -346,10 +457,29 @@ extern "C" int waterint_read_lammpstrj_file(
             return 21;
         }
 
+        if (!should_yield) {
+            for (std::size_t atom = 0; atom < frame_atoms; ++atom) {
+                if (!read_line(handle, line)) {
+                    std::fclose(handle);
+                    set_error(out, "Unexpected EOF while skipping atom rows.");
+                    return 16;
+                }
+            }
+            ++frame_index;
+            continue;
+        }
+
         steps.push_back(timestep);
         cells.push_back(cell_lengths[0]);
         cells.push_back(cell_lengths[1]);
         cells.push_back(cell_lengths[2]);
+        for (std::size_t i = 0; i < 9; ++i) {
+            cell_vectors.push_back(vectors[i]);
+        }
+        cell_origins.push_back(origin[0]);
+        cell_origins.push_back(origin[1]);
+        cell_origins.push_back(origin[2]);
+        triclinic_flags.push_back(triclinic ? 1 : 0);
         for (std::size_t atom = 0; atom < n_atoms; ++atom) {
             if (!read_line(handle, line)) {
                 std::fclose(handle);
@@ -382,6 +512,7 @@ extern "C" int waterint_read_lammpstrj_file(
             }
         }
         ++n_frames;
+        ++frame_index;
     }
 
     std::fclose(handle);
@@ -397,17 +528,24 @@ extern "C" int waterint_read_lammpstrj_file(
         : static_cast<double*>(std::malloc(velocities.size() * sizeof(double)));
     out->types = static_cast<std::int64_t*>(std::malloc(types.size() * sizeof(std::int64_t)));
     out->cells = static_cast<double*>(std::malloc(cells.size() * sizeof(double)));
+    out->cell_vectors = static_cast<double*>(std::malloc(cell_vectors.size() * sizeof(double)));
+    out->cell_origins = static_cast<double*>(std::malloc(cell_origins.size() * sizeof(double)));
+    out->triclinic = static_cast<std::uint8_t*>(std::malloc(triclinic_flags.size() * sizeof(std::uint8_t)));
     out->steps = static_cast<std::int64_t*>(std::malloc(steps.size() * sizeof(std::int64_t)));
     if (
         out->positions == nullptr || (!velocities.empty() && out->velocities == nullptr) ||
-        out->types == nullptr || out->cells == nullptr || out->steps == nullptr
+        out->types == nullptr || out->cells == nullptr || out->cell_vectors == nullptr ||
+        out->cell_origins == nullptr || out->triclinic == nullptr || out->steps == nullptr
     ) {
         std::free(out->positions);
         std::free(out->velocities);
         std::free(out->types);
         std::free(out->cells);
+        std::free(out->cell_vectors);
+        std::free(out->cell_origins);
+        std::free(out->triclinic);
         std::free(out->steps);
-        *out = WaterintLammpstrjData{0, 0, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+        *out = WaterintLammpstrjData{0, 0, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
         set_error(out, "Could not allocate LAMMPS dump output buffers.");
         return 19;
     }
@@ -417,6 +555,9 @@ extern "C" int waterint_read_lammpstrj_file(
     }
     std::memcpy(out->types, types.data(), types.size() * sizeof(std::int64_t));
     std::memcpy(out->cells, cells.data(), cells.size() * sizeof(double));
+    std::memcpy(out->cell_vectors, cell_vectors.data(), cell_vectors.size() * sizeof(double));
+    std::memcpy(out->cell_origins, cell_origins.data(), cell_origins.size() * sizeof(double));
+    std::memcpy(out->triclinic, triclinic_flags.data(), triclinic_flags.size() * sizeof(std::uint8_t));
     std::memcpy(out->steps, steps.data(), steps.size() * sizeof(std::int64_t));
     out->n_frames = n_frames;
     out->n_atoms = n_atoms;
@@ -431,7 +572,10 @@ extern "C" void waterint_free_lammpstrj_data(WaterintLammpstrjData* data) {
     std::free(data->velocities);
     std::free(data->types);
     std::free(data->cells);
+    std::free(data->cell_vectors);
+    std::free(data->cell_origins);
+    std::free(data->triclinic);
     std::free(data->steps);
     std::free(data->error);
-    *data = WaterintLammpstrjData{0, 0, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+    *data = WaterintLammpstrjData{0, 0, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
 }

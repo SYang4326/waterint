@@ -29,6 +29,9 @@ class _LammpstrjData(ctypes.Structure):
         ("velocities", ctypes.POINTER(ctypes.c_double)),
         ("types", ctypes.POINTER(ctypes.c_int64)),
         ("cells", ctypes.POINTER(ctypes.c_double)),
+        ("cell_vectors", ctypes.POINTER(ctypes.c_double)),
+        ("cell_origins", ctypes.POINTER(ctypes.c_double)),
+        ("triclinic", ctypes.POINTER(ctypes.c_uint8)),
         ("steps", ctypes.POINTER(ctypes.c_int64)),
         ("error", ctypes.POINTER(ctypes.c_char)),
     ]
@@ -159,6 +162,67 @@ def classify_oxygen_by_h_count_compact(
     )
     if status != 0:
         raise RuntimeError(f"C++ compact oxygen species classification failed with status {status}.")
+    return label_counts, grouped_indices
+
+
+def classify_oxygen_by_h_count_nearest(
+    oxygen_positions: np.ndarray,
+    hydrogen_positions: np.ndarray,
+    oxygen_indices: np.ndarray,
+    *,
+    cutoff: float,
+    cell: tuple[float, float, float] | None = None,
+    cell_vectors: np.ndarray | None = None,
+    pbc: tuple[bool, bool, bool] | None = None,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    lib = native_library()
+    if lib is None:
+        return None
+
+    oxygen_positions_array = np.ascontiguousarray(oxygen_positions, dtype=np.float64)
+    hydrogen_positions_array = np.ascontiguousarray(hydrogen_positions, dtype=np.float64)
+    oxygen_indices_array = np.ascontiguousarray(oxygen_indices, dtype=np.int64)
+    if oxygen_positions_array.ndim != 2 or oxygen_positions_array.shape[1] != 3:
+        raise ValueError("oxygen_positions must have shape (n, 3).")
+    if hydrogen_positions_array.ndim != 2 or hydrogen_positions_array.shape[1] != 3:
+        raise ValueError("hydrogen_positions must have shape (n, 3).")
+    if oxygen_indices_array.ndim != 1 or oxygen_indices_array.size != oxygen_positions_array.shape[0]:
+        raise ValueError("oxygen_indices must be one-dimensional and match oxygen_positions.")
+
+    label_counts = np.zeros(5, dtype=np.int64)
+    grouped_indices = np.zeros((5, oxygen_indices_array.size), dtype=np.int64)
+    cell_pointer = None
+    cell_vectors_pointer = None
+    pbc_pointer = None
+    if pbc is not None and any(pbc):
+        pbc_array = np.ascontiguousarray([1 if flag else 0 for flag in pbc], dtype=np.uint8)
+        pbc_pointer = pbc_array.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8))
+        if cell_vectors is not None:
+            cell_vectors_array = np.ascontiguousarray(cell_vectors, dtype=np.float64)
+            if cell_vectors_array.shape != (3, 3):
+                raise ValueError("cell_vectors must have shape (3, 3).")
+            cell_vectors_pointer = cell_vectors_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
+        elif cell is not None:
+            cell_array = np.ascontiguousarray(cell, dtype=np.float64)
+            cell_pointer = cell_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
+        else:
+            raise ValueError("cell or cell_vectors is required when pbc is enabled.")
+
+    status = lib.waterint_classify_oxygen_by_h_count_nearest(
+        oxygen_positions_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+        ctypes.c_size_t(oxygen_positions_array.shape[0]),
+        hydrogen_positions_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+        ctypes.c_size_t(hydrogen_positions_array.shape[0]),
+        oxygen_indices_array.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
+        ctypes.c_double(float(cutoff)),
+        cell_pointer,
+        cell_vectors_pointer,
+        pbc_pointer,
+        label_counts.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
+        grouped_indices.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
+    )
+    if status != 0:
+        raise RuntimeError(f"C++ nearest oxygen species classification failed with status {status}.")
     return label_counts, grouped_indices
 
 
@@ -532,8 +596,10 @@ def read_xyz_file(
 def read_lammpstrj_file(
     path: str | Path,
     *,
+    start_timestep: int | None = None,
+    stride: int = 1,
     max_frames: int | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None] | None:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None] | None:
     lib = native_library()
     if lib is None:
         return None
@@ -541,11 +607,16 @@ def read_lammpstrj_file(
     limit = 0 if max_frames in {None, 0} else int(max_frames)
     if limit < 0:
         raise ValueError("max_frames must be positive, 0, or None.")
+    if stride <= 0:
+        raise ValueError("stride must be > 0.")
 
     data = _LammpstrjData()
     status = lib.waterint_read_lammpstrj_file(
         os.fsencode(Path(path)),
         ctypes.c_size_t(limit),
+        ctypes.c_int(0 if start_timestep is None else 1),
+        ctypes.c_int64(0 if start_timestep is None else int(start_timestep)),
+        ctypes.c_size_t(stride),
         ctypes.byref(data),
     )
     try:
@@ -554,7 +625,10 @@ def read_lammpstrj_file(
             if data.error:
                 message = ctypes.string_at(data.error).decode("utf-8", errors="replace")
             raise RuntimeError(f"C++ LAMMPS dump reader failed with status {status}: {message}")
-        if not data.positions or not data.types or not data.cells or not data.steps:
+        if (
+            not data.positions or not data.types or not data.cells or not data.cell_vectors or
+            not data.cell_origins or not data.triclinic or not data.steps
+        ):
             raise RuntimeError("C++ LAMMPS dump reader returned empty buffers.")
 
         n_frames = int(data.n_frames)
@@ -567,8 +641,11 @@ def read_lammpstrj_file(
         )
         types = np.ctypeslib.as_array(data.types, shape=(n_frames, n_atoms)).copy()
         cells = np.ctypeslib.as_array(data.cells, shape=(n_frames, 3)).copy()
+        cell_vectors = np.ctypeslib.as_array(data.cell_vectors, shape=(n_frames, 3, 3)).copy()
+        cell_origins = np.ctypeslib.as_array(data.cell_origins, shape=(n_frames, 3)).copy()
+        triclinic = np.ctypeslib.as_array(data.triclinic, shape=(n_frames,)).astype(bool, copy=True)
         steps = np.ctypeslib.as_array(data.steps, shape=(n_frames,)).copy()
-        return positions, types, cells, steps, velocities
+        return positions, types, cells, cell_vectors, cell_origins, triclinic, steps, velocities
     finally:
         lib.waterint_free_lammpstrj_data(ctypes.byref(data))
 
@@ -623,6 +700,20 @@ def native_library() -> ctypes.CDLL | None:
             ctypes.POINTER(ctypes.c_int64),
         ]
         lib.waterint_classify_oxygen_by_h_count_compact.restype = ctypes.c_int
+        lib.waterint_classify_oxygen_by_h_count_nearest.argtypes = [
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_int64),
+            ctypes.c_double,
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_uint8),
+            ctypes.POINTER(ctypes.c_int64),
+            ctypes.POINTER(ctypes.c_int64),
+        ]
+        lib.waterint_classify_oxygen_by_h_count_nearest.restype = ctypes.c_int
         lib.waterint_hydrogen_neighbor_matrix.argtypes = [
             ctypes.POINTER(ctypes.c_double),
             ctypes.c_size_t,
@@ -718,6 +809,9 @@ def native_library() -> ctypes.CDLL | None:
         lib.waterint_free_xyz_data.restype = None
         lib.waterint_read_lammpstrj_file.argtypes = [
             ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_int,
+            ctypes.c_int64,
             ctypes.c_size_t,
             ctypes.POINTER(_LammpstrjData),
         ]

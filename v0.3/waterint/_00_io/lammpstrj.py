@@ -22,8 +22,7 @@ def read_lammpstrj(
 
     Supported atom columns include `id type x y z` and optional `vx vy vz`.
     Orthorhombic boxes and restricted triclinic boxes with `xy xz yz` tilt
-    factors are supported by the Python reader. The optional C++ reader remains
-    limited to orthorhombic dumps.
+    factors are supported by both the Python and optional C++ readers.
     """
     dump_path = Path(path)
     symbol_by_type = _normalize_type_map(type_map or {})
@@ -34,18 +33,19 @@ def read_lammpstrj(
     mode = str(reader).lower()
     if mode not in {"python", "auto", "cpp"}:
         raise ValueError("LAMMPS dump reader must be python, auto, or cpp.")
-    triclinic_input = _lammpstrj_has_triclinic_bounds(dump_path)
-    if mode == "cpp" and triclinic_input:
-        raise ValueError("input.reader: cpp for lammpstrj currently supports orthorhombic boxes only.")
-    if mode in {"auto", "cpp"} and start_timestep is None and stride == 1 and not triclinic_input:
-        native_frames = _read_lammpstrj_cpp(dump_path, symbol_by_type=symbol_by_type, max_frames=max_frames)
+    if mode in {"auto", "cpp"}:
+        native_frames = _read_lammpstrj_cpp(
+            dump_path,
+            symbol_by_type=symbol_by_type,
+            start_timestep=start_timestep,
+            stride=stride,
+            max_frames=max_frames,
+        )
         if native_frames is not None:
             yield from native_frames
             return
         if mode == "cpp":
             raise RuntimeError("C++ LAMMPS dump reader is unavailable. Use input.reader: auto or python.")
-    elif mode == "cpp":
-        raise ValueError("input.reader: cpp for lammpstrj currently requires start_timestep unset and stride: 1.")
 
     with dump_path.open("r", encoding="utf-8", errors="replace") as handle:
         frame_index = 0
@@ -237,14 +237,16 @@ def _read_lammpstrj_cpp(
     path: Path,
     *,
     symbol_by_type: dict[int, str],
+    start_timestep: int | None,
+    stride: int,
     max_frames: int | None,
 ) -> Iterator[TrajectoryFrame] | None:
     from waterint._02_computation._native import read_lammpstrj_file
 
-    loaded = read_lammpstrj_file(path, max_frames=max_frames)
+    loaded = read_lammpstrj_file(path, start_timestep=start_timestep, stride=stride, max_frames=max_frames)
     if loaded is None:
         return None
-    positions, types, cells, steps, velocities = loaded
+    positions, types, cells, cell_vectors, cell_origins, triclinic, steps, velocities = loaded
     shared_symbols = _symbols_from_types(types[0], symbol_by_type)
 
     def iter_loaded() -> Iterator[TrajectoryFrame]:
@@ -261,9 +263,9 @@ def _read_lammpstrj_cpp(
                 step=step,
                 types=frame_types,
                 velocities=None if velocities is None else velocities[frame_index],
-                cell_vectors=orthorhombic_cell_vectors(tuple(float(v) for v in cells[frame_index])),
-                cell_origin=None,
-                triclinic=False,
+                cell_vectors=cell_vectors[frame_index],
+                cell_origin=tuple(float(v) for v in cell_origins[frame_index]),
+                triclinic=bool(triclinic[frame_index]),
             )
 
     return iter_loaded()

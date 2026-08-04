@@ -7,6 +7,7 @@ import numpy as np
 
 from waterint._00_io.common import TrajectoryFrame
 from waterint._00_io.lammpstrj import read_lammpstrj
+from waterint._01_core.cell import orthorhombic_cell_vectors
 
 
 def read_npz(path: str | Path, *, type_map: dict | None = None) -> Iterator[TrajectoryFrame]:
@@ -16,6 +17,9 @@ def read_npz(path: str | Path, *, type_map: dict | None = None) -> Iterator[Traj
         positions = data["positions"]
         types = data["types"]
         cells = data["cells"]
+        cell_vectors = data["cell_vectors"] if "cell_vectors" in data else None
+        cell_origins = data["cell_origins"] if "cell_origins" in data else None
+        triclinic = data["triclinic"] if "triclinic" in data else None
         steps = data["steps"]
         velocities = data["velocities"] if "velocities" in data else None
         shared_symbols = None
@@ -34,6 +38,13 @@ def read_npz(path: str | Path, *, type_map: dict | None = None) -> Iterator[Traj
                 step=int(steps[frame_index]),
                 types=frame_types,
                 velocities=None if velocities is None else velocities[frame_index],
+                cell_vectors=(
+                    np.asarray(cell_vectors[frame_index], dtype=float)
+                    if cell_vectors is not None
+                    else orthorhombic_cell_vectors(tuple(float(v) for v in cells[frame_index]))
+                ),
+                cell_origin=_origin_from_npz(cell_origins, frame_index),
+                triclinic=bool(triclinic[frame_index]) if triclinic is not None else False,
             )
 
 
@@ -63,11 +74,35 @@ def write_npz_from_lammpstrj(
     positions = np.stack([frame.positions for frame in frames])
     types = np.stack([frame.types for frame in frames])
     cells = np.asarray([frame.cell for frame in frames], dtype=float)
+    cell_vectors = np.stack(
+        [
+            frame.cell_vectors
+            if frame.cell_vectors is not None
+            else orthorhombic_cell_vectors(tuple(float(v) for v in frame.cell))
+            for frame in frames
+        ]
+    )
+    cell_origins = np.asarray(
+        [
+            frame.cell_origin if frame.cell_origin is not None else (np.nan, np.nan, np.nan)
+            for frame in frames
+        ],
+        dtype=float,
+    )
+    triclinic = np.asarray([frame.triclinic for frame in frames], dtype=bool)
     steps = np.asarray([frame.step if frame.step is not None else frame.index for frame in frames], dtype=int)
     velocity_frames = [frame.velocities for frame in frames]
     if any(velocity is not None for velocity in velocity_frames) and not all(velocity is not None for velocity in velocity_frames):
         raise ValueError("Cannot write an NPZ trajectory with velocities missing from only some frames.")
-    payload = {"positions": positions, "types": types, "cells": cells, "steps": steps}
+    payload = {
+        "positions": positions,
+        "types": types,
+        "cells": cells,
+        "cell_vectors": cell_vectors,
+        "cell_origins": cell_origins,
+        "triclinic": triclinic,
+        "steps": steps,
+    }
     if velocity_frames and velocity_frames[0] is not None:
         payload["velocities"] = np.stack(velocity_frames)
     np.savez(output, **payload)
@@ -79,6 +114,15 @@ def _normalize_type_map(raw: dict) -> dict[int, str]:
     for key, value in raw.items():
         out[int(key)] = str(value)
     return out
+
+
+def _origin_from_npz(cell_origins: np.ndarray | None, frame_index: int) -> tuple[float, float, float] | None:
+    if cell_origins is None:
+        return None
+    values = np.asarray(cell_origins[frame_index], dtype=float)
+    if np.all(np.isnan(values)):
+        return None
+    return tuple(float(v) for v in values)
 
 
 def _symbols_from_types(types: np.ndarray, symbol_by_type: dict[int, str]) -> list[str]:

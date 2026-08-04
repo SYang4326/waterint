@@ -4,6 +4,7 @@ from itertools import product
 
 import numpy as np
 
+from waterint._01_core.cell import minimum_image as cell_minimum_image
 from waterint._02_computation._native import classify_oxygen_by_h_count_compact
 from waterint._02_computation._native import count_hydrogen_neighbors
 
@@ -31,6 +32,7 @@ class PythonCutoffNeighborSearch:
         *,
         cutoff: float,
         cell: tuple[float, float, float] | None = None,
+        cell_vectors: np.ndarray | None = None,
         pbc: tuple[bool, bool, bool] | None = None,
     ) -> None:
         self.query_positions = np.ascontiguousarray(query_positions, dtype=float)
@@ -46,10 +48,25 @@ class PythonCutoffNeighborSearch:
         self.pbc = (False, False, False) if pbc is None else tuple(bool(flag) for flag in pbc)
         if len(self.pbc) != 3:
             raise ValueError("pbc must contain three boolean flags.")
+        self.cell_vectors = None if cell_vectors is None else np.asarray(cell_vectors, dtype=float)
+        if self.cell_vectors is not None and self.cell_vectors.shape != (3, 3):
+            raise ValueError("cell_vectors must have shape (3, 3).")
         if any(self.pbc):
-            if cell is None or len(cell) != 3 or any(float(length) <= 0 for length in cell):
-                raise ValueError("A positive three-length cell is required when pbc is enabled.")
+            if self.cell_vectors is None and (
+                cell is None or len(cell) != 3 or any(float(length) <= 0 for length in cell)
+            ):
+                raise ValueError("A positive three-length cell or full cell_vectors matrix is required when pbc is enabled.")
         self.cell = np.zeros(3, dtype=float) if cell is None else np.asarray(cell, dtype=float)
+
+        if self.cell_vectors is not None:
+            self.origin = np.zeros(3, dtype=float)
+            self.length = np.ones(3, dtype=float)
+            self.bin_counts = np.ones(3, dtype=int)
+            self.bin_width = np.ones(3, dtype=float)
+            self.query_bins = np.zeros((self.query_positions.shape[0], 3), dtype=int)
+            self.candidates_by_bin = {}
+            self.candidate_cache = {}
+            return
 
         self.origin = np.zeros(3, dtype=float)
         self.length = np.zeros(3, dtype=float)
@@ -80,6 +97,12 @@ class PythonCutoffNeighborSearch:
     def collect_indices(self, query_index: int) -> np.ndarray:
         """Return sorted candidate indices within cutoff of one query atom."""
 
+        if self.cell_vectors is not None:
+            vectors = self.candidate_positions - self.query_positions[query_index]
+            vectors = self.minimum_image(vectors)
+            distances2 = np.einsum("ij,ij->i", vectors, vectors)
+            return np.where(distances2 <= self.cutoff2)[0].astype(int, copy=False)
+
         center = tuple(int(value) for value in self.query_bins[query_index])
         candidates = self.candidate_cache.get(center)
         if candidates is None:
@@ -105,11 +128,12 @@ class PythonCutoffNeighborSearch:
     def minimum_image(self, vectors: np.ndarray) -> np.ndarray:
         """Apply this search's minimum-image convention to displacement vectors."""
 
-        out = np.asarray(vectors, dtype=float).copy()
-        for axis, enabled in enumerate(self.pbc):
-            if enabled:
-                out[..., axis] -= np.rint(out[..., axis] / self.cell[axis]) * self.cell[axis]
-        return out
+        return cell_minimum_image(
+            vectors,
+            cell=tuple(float(value) for value in self.cell) if self.cell_vectors is None else None,
+            cell_vectors=self.cell_vectors,
+            pbc=self.pbc,
+        )
 
     def _position_bins(self, positions: np.ndarray) -> np.ndarray:
         """Map Cartesian positions to integer cell-list bins."""
@@ -151,17 +175,19 @@ def classify_oxygen_by_h_count(
     neighbor_method: str = "auto",
     neighbor_workers: int = 1,
     oxygen_chunk_size: int = 2048,
+    hydrogen_assignment: str = "all_within_cutoff",
     oxygen_indices: np.ndarray | None = None,
     hydrogen_indices: np.ndarray | None = None,
     cell: tuple[float, float, float] | None = None,
+    cell_vectors: np.ndarray | None = None,
     pbc: tuple[bool, bool, bool] | None = None,
 ) -> dict[str, np.ndarray]:
     """Classify oxygen atoms by the number of hydrogens within a cutoff.
 
-    This is a geometry-based first implementation. It is intentionally simple:
-    no bonding history, no PBC minimum-image convention, and no special handling
-    of shared protons. The default neighbor search uses scipy's cKDTree when it
-    is available, with a chunked NumPy fallback for lighter installations.
+    This is a geometry-based definition: count hydrogens inside the O-H cutoff.
+    When cell/PBC information is provided, distances use a minimum-image
+    convention. Full triclinic cell matrices use the Python path because the
+    current C++ neighbor kernels are orthorhombic.
     """
     if oh_cutoff <= 0:
         raise ValueError("oh_cutoff must be positive.")
@@ -193,7 +219,20 @@ def classify_oxygen_by_h_count(
         return {key: np.asarray(value, dtype=int) for key, value in out.items()}
 
     method = str(neighbor_method).lower()
-    if method in {"auto", "cpp"}:
+    assignment = _normalize_hydrogen_assignment(hydrogen_assignment)
+    if assignment == "nearest":
+        oxygen_positions = positions[oxygen_indices]
+        hydrogen_positions = positions[hydrogen_indices]
+        h_counts = _count_hydrogen_neighbors_unique(
+            oxygen_positions=oxygen_positions,
+            hydrogen_positions=hydrogen_positions,
+            cutoff=oh_cutoff,
+            oxygen_chunk_size=oxygen_chunk_size,
+            cell=cell,
+            cell_vectors=cell_vectors,
+            pbc=pbc,
+        )
+    elif method in {"auto", "cpp"} and cell_vectors is None:
         oxygen_positions = positions[oxygen_indices]
         hydrogen_positions = positions[hydrogen_indices]
         native_classified = _classify_oxygen_by_h_count_compact(
@@ -208,19 +247,33 @@ def classify_oxygen_by_h_count(
             return native_classified
         if method == "cpp":
             raise RuntimeError("C++ oxygen species classification backend is not available.")
-
-    oxygen_positions = positions[oxygen_indices]
-    hydrogen_positions = positions[hydrogen_indices]
-    h_counts = _count_hydrogen_neighbors(
-        oxygen_positions=oxygen_positions,
-        hydrogen_positions=hydrogen_positions,
-        cutoff=oh_cutoff,
-        method=neighbor_method,
-        workers=neighbor_workers,
-        oxygen_chunk_size=oxygen_chunk_size,
-        cell=cell,
-        pbc=pbc,
-    )
+        oxygen_positions = positions[oxygen_indices]
+        hydrogen_positions = positions[hydrogen_indices]
+        h_counts = _count_hydrogen_neighbors(
+            oxygen_positions=oxygen_positions,
+            hydrogen_positions=hydrogen_positions,
+            cutoff=oh_cutoff,
+            method=neighbor_method,
+            workers=neighbor_workers,
+            oxygen_chunk_size=oxygen_chunk_size,
+            cell=cell,
+            cell_vectors=cell_vectors,
+            pbc=pbc,
+        )
+    else:
+        oxygen_positions = positions[oxygen_indices]
+        hydrogen_positions = positions[hydrogen_indices]
+        h_counts = _count_hydrogen_neighbors(
+            oxygen_positions=oxygen_positions,
+            hydrogen_positions=hydrogen_positions,
+            cutoff=oh_cutoff,
+            method=neighbor_method,
+            workers=neighbor_workers,
+            oxygen_chunk_size=oxygen_chunk_size,
+            cell=cell,
+            cell_vectors=cell_vectors,
+            pbc=pbc,
+        )
 
     for oxygen_index, h_count in zip(oxygen_indices, h_counts):
         label = OXYGEN_SPECIES_BY_H_COUNT.get(int(h_count), "O_other")
@@ -268,9 +321,11 @@ def oxygen_hydrogen_pairs_by_species(
     neighbor_method: str = "auto",
     neighbor_workers: int = 1,
     oxygen_chunk_size: int = 2048,
+    hydrogen_assignment: str = "all_within_cutoff",
     oxygen_indices: np.ndarray | None = None,
     hydrogen_indices: np.ndarray | None = None,
     cell: tuple[float, float, float] | None = None,
+    cell_vectors: np.ndarray | None = None,
     pbc: tuple[bool, bool, bool] | None = None,
 ) -> dict[str, np.ndarray]:
     """Return O-H pairs grouped by the oxygen species label.
@@ -311,7 +366,9 @@ def oxygen_hydrogen_pairs_by_species(
         method=neighbor_method,
         workers=neighbor_workers,
         oxygen_chunk_size=oxygen_chunk_size,
+        hydrogen_assignment=hydrogen_assignment,
         cell=cell,
+        cell_vectors=cell_vectors,
         pbc=pbc,
     )
     for oxygen_index, local_hydrogen_indices in zip(oxygen_indices, neighbor_lists):
@@ -332,9 +389,11 @@ def oxygen_hydrogen_neighbors_by_species(
     neighbor_method: str = "auto",
     neighbor_workers: int = 1,
     oxygen_chunk_size: int = 2048,
+    hydrogen_assignment: str = "all_within_cutoff",
     oxygen_indices: np.ndarray | None = None,
     hydrogen_indices: np.ndarray | None = None,
     cell: tuple[float, float, float] | None = None,
+    cell_vectors: np.ndarray | None = None,
     pbc: tuple[bool, bool, bool] | None = None,
 ) -> dict[str, list[tuple[int, np.ndarray]]]:
     """Return local O-H neighbor lists grouped by oxygen species label.
@@ -375,7 +434,9 @@ def oxygen_hydrogen_neighbors_by_species(
         method=neighbor_method,
         workers=neighbor_workers,
         oxygen_chunk_size=oxygen_chunk_size,
+        hydrogen_assignment=hydrogen_assignment,
         cell=cell,
+        cell_vectors=cell_vectors,
         pbc=pbc,
     )
     for oxygen_index, local_hydrogen_indices in zip(oxygen_indices, neighbor_lists):
@@ -396,13 +457,14 @@ def _count_hydrogen_neighbors(
     oxygen_chunk_size: int,
     cell: tuple[float, float, float] | None,
     pbc: tuple[bool, bool, bool] | None,
+    cell_vectors: np.ndarray | None = None,
 ) -> np.ndarray:
     method = str(method).lower()
     if method not in {"auto", "cpp", "kdtree", "matrix"}:
         raise ValueError("selection.neighbor_method must be auto, cpp, kdtree, or matrix.")
 
     use_pbc = _uses_pbc(pbc)
-    if method in {"auto", "cpp"}:
+    if method in {"auto", "cpp"} and cell_vectors is None:
         native_counts = count_hydrogen_neighbors(
             oxygen_positions,
             hydrogen_positions,
@@ -417,6 +479,23 @@ def _count_hydrogen_neighbors(
 
     if use_pbc and method == "kdtree":
         raise ValueError("selection.neighbor_method: kdtree does not support pbc-aware O-H assignment; use auto or matrix.")
+
+    if cell_vectors is not None:
+        if method == "cpp":
+            raise ValueError("selection.neighbor_method: cpp does not support triclinic cell_vectors; use auto or matrix.")
+        search = PythonCutoffNeighborSearch(
+            oxygen_positions,
+            hydrogen_positions,
+            cutoff=cutoff,
+            cell=cell,
+            cell_vectors=cell_vectors,
+            pbc=pbc,
+        )
+        return np.fromiter(
+            (search.collect_indices(index).size for index in range(oxygen_positions.shape[0])),
+            dtype=int,
+            count=oxygen_positions.shape[0],
+        )
 
     if method in {"auto", "kdtree"} and not use_pbc:
         try:
@@ -436,8 +515,31 @@ def _count_hydrogen_neighbors(
         cutoff=cutoff,
         oxygen_chunk_size=oxygen_chunk_size,
         cell=cell,
+        cell_vectors=cell_vectors,
         pbc=pbc,
     )
+
+
+def _count_hydrogen_neighbors_unique(
+    *,
+    oxygen_positions: np.ndarray,
+    hydrogen_positions: np.ndarray,
+    cutoff: float,
+    oxygen_chunk_size: int,
+    cell: tuple[float, float, float] | None,
+    pbc: tuple[bool, bool, bool] | None,
+    cell_vectors: np.ndarray | None = None,
+) -> np.ndarray:
+    neighbor_lists = _hydrogen_neighbor_lists_unique(
+        oxygen_positions=oxygen_positions,
+        hydrogen_positions=hydrogen_positions,
+        cutoff=cutoff,
+        oxygen_chunk_size=oxygen_chunk_size,
+        cell=cell,
+        cell_vectors=cell_vectors,
+        pbc=pbc,
+    )
+    return np.fromiter((items.size for items in neighbor_lists), dtype=int, count=len(neighbor_lists))
 
 
 def _hydrogen_neighbor_lists(
@@ -450,16 +552,40 @@ def _hydrogen_neighbor_lists(
     oxygen_chunk_size: int,
     cell: tuple[float, float, float] | None,
     pbc: tuple[bool, bool, bool] | None,
+    cell_vectors: np.ndarray | None = None,
+    hydrogen_assignment: str = "all_within_cutoff",
 ) -> list[np.ndarray]:
     method = str(method).lower()
     if method not in {"auto", "cpp", "kdtree", "matrix"}:
         raise ValueError("selection.neighbor_method must be auto, cpp, kdtree, or matrix.")
     if method == "cpp":
         raise ValueError("selection.neighbor_method: cpp is currently available for species counts only; use auto or matrix for neighbor lists.")
+    assignment = _normalize_hydrogen_assignment(hydrogen_assignment)
+    if assignment == "nearest":
+        return _hydrogen_neighbor_lists_unique(
+            oxygen_positions=oxygen_positions,
+            hydrogen_positions=hydrogen_positions,
+            cutoff=cutoff,
+            oxygen_chunk_size=oxygen_chunk_size,
+            cell=cell,
+            cell_vectors=cell_vectors,
+            pbc=pbc,
+        )
 
     use_pbc = _uses_pbc(pbc)
     if use_pbc and method == "kdtree":
         raise ValueError("selection.neighbor_method: kdtree does not support pbc-aware O-H assignment; use auto or matrix.")
+
+    if cell_vectors is not None:
+        search = PythonCutoffNeighborSearch(
+            oxygen_positions,
+            hydrogen_positions,
+            cutoff=cutoff,
+            cell=cell,
+            cell_vectors=cell_vectors,
+            pbc=pbc,
+        )
+        return [search.collect_indices(index) for index in range(oxygen_positions.shape[0])]
 
     if method in {"auto", "kdtree"} and not use_pbc:
         try:
@@ -479,8 +605,36 @@ def _hydrogen_neighbor_lists(
         cutoff=cutoff,
         oxygen_chunk_size=oxygen_chunk_size,
         cell=cell,
+        cell_vectors=cell_vectors,
         pbc=pbc,
     )
+
+
+def _hydrogen_neighbor_lists_unique(
+    *,
+    oxygen_positions: np.ndarray,
+    hydrogen_positions: np.ndarray,
+    cutoff: float,
+    oxygen_chunk_size: int,
+    cell: tuple[float, float, float] | None,
+    pbc: tuple[bool, bool, bool] | None,
+    cell_vectors: np.ndarray | None = None,
+) -> list[np.ndarray]:
+    cutoff2 = cutoff * cutoff
+    assigned: list[list[int]] = [[] for _ in range(oxygen_positions.shape[0])]
+    chunk_size = max(1, oxygen_chunk_size)
+    for start in range(0, hydrogen_positions.shape[0], chunk_size):
+        stop = min(start + chunk_size, hydrogen_positions.shape[0])
+        hydrogen_chunk = hydrogen_positions[start:stop]
+        d = hydrogen_chunk[:, None, :] - oxygen_positions[None, :, :]
+        d = _minimum_image(d, cell=cell, cell_vectors=cell_vectors, pbc=pbc)
+        dist2 = np.sum(d * d, axis=2)
+        nearest_oxygen = np.argmin(dist2, axis=1)
+        nearest_distance2 = dist2[np.arange(stop - start), nearest_oxygen]
+        valid = nearest_distance2 <= cutoff2
+        for local_hydrogen, oxygen_index in zip(np.where(valid)[0], nearest_oxygen[valid]):
+            assigned[int(oxygen_index)].append(int(start + local_hydrogen))
+    return [np.asarray(items, dtype=int) for items in assigned]
 
 
 def _hydrogen_neighbor_lists_kdtree(
@@ -514,6 +668,7 @@ def _hydrogen_neighbor_lists_matrix(
     oxygen_chunk_size: int,
     cell: tuple[float, float, float] | None,
     pbc: tuple[bool, bool, bool] | None,
+    cell_vectors: np.ndarray | None = None,
 ) -> list[np.ndarray]:
     cutoff2 = cutoff * cutoff
     out: list[np.ndarray] = []
@@ -521,7 +676,7 @@ def _hydrogen_neighbor_lists_matrix(
         stop = min(start + oxygen_chunk_size, oxygen_positions.shape[0])
         oxygen_chunk = oxygen_positions[start:stop]
         d = hydrogen_positions[:, None, :] - oxygen_chunk[None, :, :]
-        d = _minimum_image(d, cell=cell, pbc=pbc)
+        d = _minimum_image(d, cell=cell, cell_vectors=cell_vectors, pbc=pbc)
         dist2 = np.sum(d * d, axis=2)
         out.extend(np.where(dist2[:, i] <= cutoff2)[0] for i in range(stop - start))
     return [np.asarray(items, dtype=int) for items in out]
@@ -564,6 +719,7 @@ def _count_hydrogen_neighbors_matrix(
     oxygen_chunk_size: int,
     cell: tuple[float, float, float] | None,
     pbc: tuple[bool, bool, bool] | None,
+    cell_vectors: np.ndarray | None = None,
 ) -> np.ndarray:
     cutoff2 = cutoff * cutoff
     h_counts = np.empty(oxygen_positions.shape[0], dtype=int)
@@ -571,7 +727,7 @@ def _count_hydrogen_neighbors_matrix(
         stop = min(start + oxygen_chunk_size, oxygen_positions.shape[0])
         oxygen_chunk = oxygen_positions[start:stop]
         d = hydrogen_positions[:, None, :] - oxygen_chunk[None, :, :]
-        d = _minimum_image(d, cell=cell, pbc=pbc)
+        d = _minimum_image(d, cell=cell, cell_vectors=cell_vectors, pbc=pbc)
         dist2 = np.sum(d * d, axis=2)
         h_counts[start:stop] = np.sum(dist2 <= cutoff2, axis=0)
     return h_counts
@@ -581,17 +737,18 @@ def _uses_pbc(pbc: tuple[bool, bool, bool] | None) -> bool:
     return bool(pbc is not None and any(pbc))
 
 
+def _normalize_hydrogen_assignment(value: str) -> str:
+    assignment = str(value).lower()
+    if assignment not in {"all_within_cutoff", "nearest"}:
+        raise ValueError("hydrogen_assignment must be all_within_cutoff or nearest.")
+    return assignment
+
+
 def _minimum_image(
     vectors: np.ndarray,
     *,
     cell: tuple[float, float, float] | None,
+    cell_vectors: np.ndarray | None = None,
     pbc: tuple[bool, bool, bool] | None,
 ) -> np.ndarray:
-    if cell is None or pbc is None or not any(pbc):
-        return vectors
-    out = np.asarray(vectors, dtype=float).copy()
-    cell_array = np.asarray(cell, dtype=float)
-    for axis, enabled in enumerate(pbc):
-        if enabled:
-            out[..., axis] -= np.rint(out[..., axis] / cell_array[axis]) * cell_array[axis]
-    return out
+    return cell_minimum_image(vectors, cell=cell, cell_vectors=cell_vectors, pbc=pbc)

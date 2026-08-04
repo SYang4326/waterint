@@ -8,6 +8,7 @@ import math
 
 import numpy as np
 
+from waterint._01_core.cell import cross_section_area
 from waterint._02_computation._native import density_histogram_edges
 
 
@@ -27,6 +28,7 @@ class DensityState:
     counts_by_label: dict[str, np.ndarray]
     frames: int = 0
     selected_atoms_total: dict[str, int] | None = None
+    cell_vectors: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -53,9 +55,12 @@ def accumulate_density_frame(
     coordinates_by_label: dict[str, np.ndarray],
     *,
     backend: str = "auto",
+    cell_vectors: np.ndarray | None = None,
 ) -> None:
     if state.selected_atoms_total is None:
         state.selected_atoms_total = {label: 0 for label in state.counts_by_label}
+    if state.cell_vectors is None and cell_vectors is not None:
+        state.cell_vectors = np.asarray(cell_vectors, dtype=float)
     for label, values in coordinates_by_label.items():
         if label not in state.counts_by_label:
             continue
@@ -74,6 +79,7 @@ def compute_density_profile(
     axis: int,
     normalization_cfg: Any = None,
     backend: str = "auto",
+    cell_vectors: np.ndarray | None = None,
 ) -> DensityResult:
     state = new_density_state(labels, bin_edges)
     for coordinates_by_label in coordinates_by_frame:
@@ -81,6 +87,7 @@ def compute_density_profile(
     return finalize_density_state(
         state,
         cell=cell,
+        cell_vectors=cell_vectors,
         axis=axis,
         normalization_cfg=normalization_cfg,
     )
@@ -113,6 +120,7 @@ def finalize_density_state(
     *,
     cell: tuple[float, float, float],
     axis: int,
+    cell_vectors: np.ndarray | None = None,
     normalization_cfg: Any = None,
 ) -> DensityResult:
     if state.frames == 0:
@@ -128,6 +136,7 @@ def finalize_density_state(
                 counts=counts,
                 frames=state.frames,
                 cell=cell,
+                cell_vectors=cell_vectors if cell_vectors is not None else state.cell_vectors,
                 axis=axis,
                 bin_width=float(bin_widths[0]),
                 normalization_cfg=normalization_cfg,
@@ -150,6 +159,7 @@ def normalize_density_counts(
     frames: int,
     cell: tuple[float, float, float],
     axis: int,
+    cell_vectors: np.ndarray | None = None,
     bin_width: float,
     normalization_cfg: Any,
     label: str,
@@ -165,8 +175,8 @@ def normalize_density_counts(
     if norm_type not in {"number_density", "mass_density"}:
         raise ValueError("normalization.type must be number_density, mass_density, or counts_per_frame.")
 
-    perpendicular_lengths = [cell[i] for i in range(3) if i != axis]
-    slab_volume = perpendicular_lengths[0] * perpendicular_lengths[1] * bin_width
+    area = cross_section_area(cell=cell, cell_vectors=cell_vectors, axis=axis)
+    slab_volume = area * bin_width
     if not math.isfinite(slab_volume) or slab_volume <= 0:
         raise ValueError("Computed slab volume must be positive.")
     number_density = counts / frames / slab_volume

@@ -41,7 +41,19 @@ def oxygen_species_indices(
         neighbor_method=str(selection_cfg.get("neighbor_method", "auto")),
         neighbor_workers=int(selection_cfg.get("neighbor_workers", 1)),
         oxygen_chunk_size=int(selection_cfg.get("oxygen_chunk_size", 2048)),
+        hydrogen_assignment=str(selection_cfg.get("hydrogen_assignment", "nearest")),
         oxygen_indices=element_indices(frame, {oxygen_symbol}, context),
         hydrogen_indices=element_indices(frame, {hydrogen_symbol}, context),
+        cell=frame.cell,
+        cell_vectors=frame.cell_vectors if frame.triclinic else None,
+        pbc=_pbc_flags(selection_cfg.get("pbc", [True, True, False])),
     )
     return {label: classified[label] for label in oxygen_species_labels(selection_cfg)}
+
+
+def _pbc_flags(value: Any) -> tuple[bool, bool, bool]:
+    if isinstance(value, bool):
+        return (value, value, value)
+    if not isinstance(value, list) or len(value) != 3:
+        raise ValueError("selection.pbc must be a boolean or a list of three booleans.")
+    return tuple(bool(item) for item in value)  # type: ignore[return-value]

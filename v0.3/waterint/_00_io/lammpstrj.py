@@ -6,6 +6,7 @@ from typing import Any, Iterator
 import numpy as np
 
 from waterint._00_io.common import TrajectoryFrame
+from waterint._01_core.cell import orthorhombic_cell_vectors
 
 
 def read_lammpstrj(
@@ -17,10 +18,12 @@ def read_lammpstrj(
     max_frames: int | None = None,
     reader: str = "python",
 ) -> Iterator[TrajectoryFrame]:
-    """Stream orthorhombic LAMMPS dump frames.
+    """Stream LAMMPS dump frames.
 
     Supported atom columns include `id type x y z` and optional `vx vy vz`.
-    Triclinic tilt factors are not interpreted yet.
+    Orthorhombic boxes and restricted triclinic boxes with `xy xz yz` tilt
+    factors are supported by the Python reader. The optional C++ reader remains
+    limited to orthorhombic dumps.
     """
     dump_path = Path(path)
     symbol_by_type = _normalize_type_map(type_map or {})
@@ -31,7 +34,10 @@ def read_lammpstrj(
     mode = str(reader).lower()
     if mode not in {"python", "auto", "cpp"}:
         raise ValueError("LAMMPS dump reader must be python, auto, or cpp.")
-    if mode in {"auto", "cpp"} and start_timestep is None and stride == 1:
+    triclinic_input = _lammpstrj_has_triclinic_bounds(dump_path)
+    if mode == "cpp" and triclinic_input:
+        raise ValueError("input.reader: cpp for lammpstrj currently supports orthorhombic boxes only.")
+    if mode in {"auto", "cpp"} and start_timestep is None and stride == 1 and not triclinic_input:
         native_frames = _read_lammpstrj_cpp(dump_path, symbol_by_type=symbol_by_type, max_frames=max_frames)
         if native_frames is not None:
             yield from native_frames
@@ -64,8 +70,11 @@ def read_lammpstrj(
             box_header = handle.readline().strip()
             if not box_header.startswith("ITEM: BOX BOUNDS"):
                 raise ValueError(f"Expected ITEM: BOX BOUNDS in {dump_path}, got {box_header!r}")
-            bounds = [_parse_bound_line(handle.readline()) for _ in range(3)]
-            cell = tuple(hi - lo for lo, hi in bounds)
+            box = _parse_box_bounds(box_header, [handle.readline() for _ in range(3)])
+            cell = box["cell"]
+            cell_vectors = box["cell_vectors"]
+            cell_origin = box["cell_origin"]
+            triclinic = bool(box["triclinic"])
 
             atoms_header = handle.readline().strip()
             if not atoms_header.startswith("ITEM: ATOMS"):
@@ -133,6 +142,9 @@ def read_lammpstrj(
                 step=timestep,
                 types=types,
                 velocities=velocities,
+                cell_vectors=cell_vectors,
+                cell_origin=cell_origin,
+                triclinic=triclinic,
             )
             yielded += 1
             if max_frames is not None and yielded >= max_frames:
@@ -145,6 +157,69 @@ def _parse_bound_line(line: str) -> tuple[float, float]:
     if len(fields) < 2:
         raise ValueError(f"Bad BOX BOUNDS row: {line!r}")
     return float(fields[0]), float(fields[1])
+
+
+def _parse_box_bounds(box_header: str, rows: list[str]) -> dict[str, object]:
+    words = box_header.split()
+    triclinic = len(words) > 6 or any(word in {"xy", "xz", "yz"} for word in words[3:])
+    if not triclinic:
+        bounds = [_parse_bound_line(row) for row in rows]
+        cell = tuple(float(hi - lo) for lo, hi in bounds)
+        origin = tuple(float(lo) for lo, _hi in bounds)
+        return {
+            "cell": cell,
+            "cell_vectors": orthorhombic_cell_vectors(cell),
+            "cell_origin": origin,
+            "triclinic": False,
+        }
+
+    parsed = [_parse_triclinic_bound_line(row) for row in rows]
+    xlo_bound, xhi_bound, xy = parsed[0]
+    ylo_bound, yhi_bound, xz = parsed[1]
+    zlo_bound, zhi_bound, yz = parsed[2]
+
+    xlo = xlo_bound - min(0.0, xy, xz, xy + xz)
+    xhi = xhi_bound - max(0.0, xy, xz, xy + xz)
+    ylo = ylo_bound - min(0.0, yz)
+    yhi = yhi_bound - max(0.0, yz)
+    zlo = zlo_bound
+    zhi = zhi_bound
+
+    lx = xhi - xlo
+    ly = yhi - ylo
+    lz = zhi - zlo
+    if lx <= 0 or ly <= 0 or lz <= 0:
+        raise ValueError(f"Bad triclinic BOX BOUNDS rows: {rows!r}")
+    cell_vectors = np.asarray(
+        [
+            [lx, 0.0, 0.0],
+            [xy, ly, 0.0],
+            [xz, yz, lz],
+        ],
+        dtype=float,
+    )
+    return {
+        "cell": (float(lx), float(ly), float(lz)),
+        "cell_vectors": cell_vectors,
+        "cell_origin": (float(xlo), float(ylo), float(zlo)),
+        "triclinic": True,
+    }
+
+
+def _parse_triclinic_bound_line(line: str) -> tuple[float, float, float]:
+    fields = line.split()
+    if len(fields) < 3:
+        raise ValueError(f"Bad triclinic BOX BOUNDS row: {line!r}")
+    return float(fields[0]), float(fields[1]), float(fields[2])
+
+
+def _lammpstrj_has_triclinic_bounds(path: Path) -> bool:
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            if line.startswith("ITEM: BOX BOUNDS"):
+                words = line.split()
+                return len(words) > 6 or any(word in {"xy", "xz", "yz"} for word in words[3:])
+    return False
 
 
 def _normalize_type_map(raw: dict[Any, str]) -> dict[int, str]:
@@ -186,6 +261,9 @@ def _read_lammpstrj_cpp(
                 step=step,
                 types=frame_types,
                 velocities=None if velocities is None else velocities[frame_index],
+                cell_vectors=orthorhombic_cell_vectors(tuple(float(v) for v in cells[frame_index])),
+                cell_origin=None,
+                triclinic=False,
             )
 
     return iter_loaded()

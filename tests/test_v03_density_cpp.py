@@ -252,6 +252,123 @@ ITEM: ATOMS id type x y z vx vy vz
             self.assertIsNotNone(expected.velocities)
             np.testing.assert_allclose(actual.velocities, expected.velocities)
 
+    def test_lammpstrj_reader_reconstructs_triclinic_cell(self):
+        lammpstrj = importlib.import_module("waterint._00_io.lammpstrj")
+
+        content = """ITEM: TIMESTEP
+0
+ITEM: NUMBER OF ATOMS
+2
+ITEM: BOX BOUNDS xy xz yz pp pp pp
+0 14 4
+0 10 0
+0 10 0
+ITEM: ATOMS id type x y z
+1 3 9.7 0.0 0.0
+2 1 0.2 0.0 0.0
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "triclinic.lammpstrj"
+            path.write_text(content, encoding="utf-8")
+            frame = next(lammpstrj.read_lammpstrj(path, type_map={1: "H", 3: "O"}, reader="auto"))
+
+        self.assertTrue(frame.triclinic)
+        self.assertEqual(frame.cell, (10.0, 10.0, 10.0))
+        np.testing.assert_allclose(
+            frame.cell_vectors,
+            np.asarray([[10.0, 0.0, 0.0], [4.0, 10.0, 0.0], [0.0, 0.0, 10.0]]),
+        )
+
+    def test_oxygen_species_uses_triclinic_minimum_image(self):
+        common = importlib.import_module("waterint._00_io.common")
+        selection = importlib.import_module("waterint._01_core.selection")
+        species = importlib.import_module("waterint._01_core.species")
+
+        frame = common.TrajectoryFrame(
+            index=0,
+            comment="triclinic crossing",
+            symbols=["O", "H", "H"],
+            positions=np.asarray([[9.7, 0.0, 0.0], [0.2, 0.0, 0.0], [9.1, 0.0, 0.0]], dtype=float),
+            cell=(10.0, 10.0, 10.0),
+            types=np.asarray([3, 1, 1], dtype=int),
+            cell_vectors=np.asarray([[10.0, 0.0, 0.0], [4.0, 10.0, 0.0], [0.0, 0.0, 10.0]]),
+            triclinic=True,
+        )
+        context = selection.SelectionContext.from_input_config({"type_map": {1: "H", 3: "O"}})
+        classified = species.oxygen_species_indices(
+            frame,
+            {
+                "mode": "oxygen_species",
+                "oxygen_species": ["OH-", "H2O"],
+                "oxygen_symbol": "O",
+                "hydrogen_symbol": "H",
+                "oh_cutoff": 1.0,
+                "neighbor_method": "matrix",
+                "pbc": [True, False, False],
+            },
+            context,
+        )
+
+        np.testing.assert_array_equal(classified["OH-"], np.empty(0, dtype=int))
+        np.testing.assert_array_equal(classified["H2O"], np.asarray([0]))
+
+    def test_oxygen_species_assigns_shared_h_to_nearest_oxygen(self):
+        common = importlib.import_module("waterint._00_io.common")
+        selection = importlib.import_module("waterint._01_core.selection")
+        species = importlib.import_module("waterint._01_core.species")
+
+        frame = common.TrajectoryFrame(
+            index=0,
+            comment="shared hydrogen",
+            symbols=["O", "O", "H"],
+            positions=np.asarray([[0.0, 0.0, 0.0], [0.9, 0.0, 0.0], [0.7, 0.0, 0.0]], dtype=float),
+            cell=(10.0, 10.0, 10.0),
+            types=np.asarray([3, 3, 1], dtype=int),
+            triclinic=False,
+        )
+        context = selection.SelectionContext.from_input_config({"type_map": {1: "H", 3: "O"}})
+        classified = species.oxygen_species_indices(
+            frame,
+            {
+                "mode": "oxygen_species",
+                "oxygen_species": ["O2-", "OH-", "H2O"],
+                "oxygen_symbol": "O",
+                "hydrogen_symbol": "H",
+                "oh_cutoff": 1.0,
+                "neighbor_method": "auto",
+                "pbc": [False, False, False],
+            },
+            context,
+        )
+
+        np.testing.assert_array_equal(classified["O2-"], np.asarray([0]))
+        np.testing.assert_array_equal(classified["OH-"], np.asarray([1]))
+        np.testing.assert_array_equal(classified["H2O"], np.empty(0, dtype=int))
+
+    def test_density_normalization_uses_triclinic_cross_section_area(self):
+        density = importlib.import_module("waterint._02_computation.density")
+
+        cell_vectors = np.asarray(
+            [
+                [10.0, 0.0, 0.0],
+                [4.0, 10.0, 0.0],
+                [0.0, 0.0, 10.0],
+            ]
+        )
+        counts = np.asarray([1.0])
+        profile = density.normalize_density_counts(
+            counts=counts,
+            frames=1,
+            cell=(10.0, 10.0, 10.0),
+            cell_vectors=cell_vectors,
+            axis=2,
+            bin_width=1.0,
+            normalization_cfg={"type": "mass_density", "unit": "g/cm^3"},
+            label="H2O",
+        )
+        expected = 18.015 * density.AMU_PER_A3_TO_G_PER_CM3 / 100.0
+        self.assertAlmostEqual(float(profile[0]), expected)
+
     def test_npz_reader_reuses_symbols_for_fixed_topology(self):
         npz = importlib.import_module("waterint._00_io.npz")
 

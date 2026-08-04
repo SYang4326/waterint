@@ -110,6 +110,7 @@ class DensityWorkflowState:
     coordinate: CoordinateSpec
     normalization_cfg: Any
     backend: str
+    cell_vectors: np.ndarray | None = None
 
 
 def density_profile_labels(selection_cfg: dict[str, Any]) -> list[str]:
@@ -129,11 +130,18 @@ def _accumulate_density_frame(
     frame: TrajectoryFrame,
     _cell: tuple[float, float, float],
 ) -> None:
+    if state.cell_vectors is None and frame.cell_vectors is not None:
+        state.cell_vectors = frame.cell_vectors
     coordinates_by_label = {
         label: coordinate_values(frame, indices, state.coordinate, state.context)
         for label, indices in selected_indices_by_label(frame, state.selection_cfg, state.context).items()
     }
-    accumulate_density_frame(state.density, coordinates_by_label, backend=state.backend)
+    accumulate_density_frame(
+        state.density,
+        coordinates_by_label,
+        backend=state.backend,
+        cell_vectors=frame.cell_vectors,
+    )
 
 
 def _finalize_density(
@@ -144,6 +152,7 @@ def _finalize_density(
         state.density,
         cell=cell,
         axis=state.coordinate.axis,
+        cell_vectors=state.cell_vectors,
         normalization_cfg=state.normalization_cfg,
     )
 

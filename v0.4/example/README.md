@@ -28,6 +28,10 @@ installations that fall back to Python:
   It writes Mg-O/Mg-H plus each oxygen group's O-O/O-H RDFs.
 - `mgo_sfg/`: trajectory-based SFG response on a short frame window by default.
 
+`mgo_sfg/config_layered_sfg_quick.yaml` is a short layer- and hydroxide-
+resolved SFG configuration. It writes the all-O-H and `nh1` (OH-) channel for
+each configured z bin. Layered SFG currently uses the Python segment path.
+
 `mgo_sfg/config_100ps_npz_full.yaml` is included for the full 100 ps SFG run,
 but it is not part of the default example command. On the benchmark machine,
 the full C++-assisted CLI run took 36.5 s; the pure Python analysis baseline
@@ -67,6 +71,7 @@ PYTHONPATH=v0.4 python -m waterint.cli msd --config v0.4/example/mgo_msd/config_
 PYTHONPATH=v0.4 python -m waterint.cli rdf --config v0.4/example/mgo_rdf/config_oo_oh.yaml
 PYTHONPATH=v0.4 python -m waterint.cli rdf --config v0.4/example/mgo_rdf/config_relabelled_oxygen_groups.yaml
 PYTHONPATH=v0.4 python -m waterint.cli sfg --config v0.4/example/mgo_sfg/config_100ps_npz.yaml
+PYTHONPATH=v0.4 python -m waterint.cli sfg --config v0.4/example/mgo_sfg/config_layered_sfg_quick.yaml
 ```
 
 Run the complete 100 ps SFG example:

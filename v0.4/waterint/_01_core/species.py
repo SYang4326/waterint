@@ -12,6 +12,39 @@ from waterint._01_core.selection import SelectionContext, element_indices
 OXYGEN_SPECIES_ORDER = ("O2-", "OH-", "H2O", "H3O+", "O_other")
 
 
+def classify_assigned_oxygen_indices(
+    oxygen_indices: np.ndarray,
+    assigned_hydrogens: dict[int, int],
+) -> dict[str, np.ndarray]:
+    """Classify oxygen atoms from an already-resolved H-to-O assignment.
+
+    SFG assigns each hydrogen once before constructing continuous bond segments.
+    Reusing that assignment here keeps species channels consistent with the SFG
+    correlation while avoiding a second neighbor search for every frame.
+    """
+
+    counts = {int(oxygen_index): 0 for oxygen_index in np.asarray(oxygen_indices, dtype=int)}
+    for oxygen_index in assigned_hydrogens.values():
+        oxygen_index = int(oxygen_index)
+        if oxygen_index in counts:
+            counts[oxygen_index] += 1
+
+    result: dict[str, list[int]] = {label: [] for label in OXYGEN_SPECIES_ORDER}
+    for oxygen_index, hydrogen_count in counts.items():
+        if hydrogen_count == 0:
+            label = "O2-"
+        elif hydrogen_count == 1:
+            label = "OH-"
+        elif hydrogen_count == 2:
+            label = "H2O"
+        elif hydrogen_count >= 3:
+            label = "H3O+"
+        else:
+            label = "O_other"
+        result[label].append(oxygen_index)
+    return {label: np.asarray(indices, dtype=int) for label, indices in result.items()}
+
+
 def oxygen_species_labels(selection_cfg: dict[str, Any]) -> list[str]:
     selected = selection_cfg.get("oxygen_species", "all")
     if selected == "all":

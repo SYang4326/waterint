@@ -13,6 +13,7 @@ from waterint._02_computation._native import sfg_ssvvcf
 from waterint._00_io.common import TrajectoryFrame
 from waterint._01_core.coordinates import fixed_reference_value, slab_surface_reference
 from waterint._01_core.selection import SelectionContext, element_indices, element_mask
+from waterint._01_core.species import OXYGEN_SPECIES_ORDER, classify_assigned_oxygen_indices
 
 
 AU2INVCM = 219474.62909500976
@@ -38,12 +39,31 @@ class SsvvcfResult:
     velocity_source: str
 
 
+@dataclass(frozen=True)
+class LayeredSsvvcfResult:
+    """One SFG result per configured layer/species channel."""
+
+    channels: dict[str, SsvvcfResult]
+    zrefs: np.ndarray
+    frames: int
+    velocity_source: str
+
+
 @dataclass
 class _Segment:
     hydrogen_index: int
     oxygen_index: int
     mu: list[float] = field(default_factory=list)
     stretch: list[float] = field(default_factory=list)
+
+
+@dataclass
+class _LayeredSegment:
+    hydrogen_index: int
+    oxygen_index: int
+    mu: dict[str, list[float]] = field(default_factory=dict)
+    stretch: dict[str, list[float]] = field(default_factory=dict)
+    masks: dict[str, list[bool]] = field(default_factory=dict)
 
 
 def load_cf(path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -291,6 +311,129 @@ def compute_ssvvcf_from_frames(
     )
 
 
+def compute_layered_ssvvcf_from_frames(
+    frames: list[TrajectoryFrame],
+    *,
+    cell: tuple[float, float, float],
+    sfg_cfg: dict[str, Any],
+    context: SelectionContext,
+) -> LayeredSsvvcfResult:
+    """Compute layer- and oxygen-species-resolved SFG correlations in Python.
+
+    The current native SFG kernel owns one scalar window. Multi-channel output
+    therefore uses the established Python segment path, which lets every bond
+    carry a per-frame mask for each layer/species channel.
+    """
+
+    if len(frames) < 3:
+        raise ValueError("SFG trajectory mode needs at least three frames for finite-difference velocities.")
+    channel_specs = layered_channel_specs(sfg_cfg)
+    if not channel_specs:
+        raise ValueError("sfg.layer_bins must contain at least one layer definition.")
+
+    dt_ps = float(sfg_cfg.get("dt_ps", _infer_dt_ps(frames)))
+    if dt_ps <= 0:
+        raise ValueError("sfg.dt_ps must be positive.")
+    lag_ps = float(sfg_cfg.get("lag_ps", dt_ps * min(200, max(1, len(frames) - 1))))
+    max_lag = int(round(lag_ps / dt_ps))
+    if max_lag < 1:
+        raise ValueError("sfg.lag_ps must be at least one frame.")
+
+    pbc = pbc_flags(sfg_cfg.get("pbc", [True, True, False]))
+    hydrogen_symbol = str(sfg_cfg.get("hydrogen_symbol", "H"))
+    oxygen_symbol = str(sfg_cfg.get("oxygen_symbol", "O"))
+    oh_cutoff = float(sfg_cfg.get("oh_cutoff", sfg_cfg.get("bond_cutoff", 1.25)))
+    oh_assignment = str(sfg_cfg.get("oh_assignment", "cutoff")).lower()
+    if oh_assignment not in {"cutoff", "nearest_oxygen"}:
+        raise ValueError("sfg.oh_assignment must be cutoff or nearest_oxygen.")
+    mu_mode = str(sfg_cfg.get("mu_mode", "full")).lower()
+    if mu_mode not in {"full", "stretch"}:
+        raise ValueError("sfg.mu_mode must be full or stretch.")
+
+    zrefs = zref_series(frames, sfg_cfg, context)
+    velocities, velocity_source = sfg_velocities_from_frames(frames, sfg_cfg=sfg_cfg, cell=cell, pbc=pbc)
+    segments = build_layered_sfg_segments_python(
+        frames,
+        velocities=velocities,
+        zrefs=zrefs,
+        cell=cell,
+        sfg_cfg=sfg_cfg,
+        context=context,
+        pbc=pbc,
+        oxygen_symbol=oxygen_symbol,
+        hydrogen_symbol=hydrogen_symbol,
+        oh_cutoff=oh_cutoff,
+        oh_assignment=oh_assignment,
+        mu_mode=mu_mode,
+        channel_specs=channel_specs,
+    )
+    time_ps = np.arange(max_lag + 1, dtype=float) * dt_ps
+    channels: dict[str, SsvvcfResult] = {}
+    for channel_name in channel_specs:
+        sums, counts = correlate_layered_sfg_segments_python(
+            segments,
+            channel_name=channel_name,
+            max_lag=max_lag,
+            symmetrize=bool(sfg_cfg.get("symmetrize", True)),
+        )
+        corr = np.zeros_like(sums)
+        nonzero = counts > 0
+        corr[nonzero] = sums[nonzero] / counts[nonzero]
+        channels[channel_name] = SsvvcfResult(
+            time_ps=time_ps,
+            corr=corr,
+            counts=counts,
+            zrefs=zrefs,
+            frames=len(frames),
+            velocity_source=velocity_source,
+        )
+    return LayeredSsvvcfResult(channels=channels, zrefs=zrefs, frames=len(frames), velocity_source=velocity_source)
+
+
+def layered_channel_specs(sfg_cfg: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Normalize layer bins and requested oxygen-species channels.
+
+    Each layer always writes an ``all`` channel. ``OH-`` is additionally
+    exposed as the legacy-compatible ``nh1`` alias when requested.
+    """
+
+    raw_bins = sfg_cfg.get("layer_bins")
+    if raw_bins is None:
+        return {}
+    if not isinstance(raw_bins, list) or not raw_bins:
+        raise ValueError("sfg.layer_bins must be a non-empty list.")
+    raw_species = sfg_cfg.get("species_channels", ["OH-"])
+    if raw_species == "all":
+        species = ["all", *OXYGEN_SPECIES_ORDER]
+    elif isinstance(raw_species, list) and raw_species:
+        species = ["all", *[str(value) for value in raw_species if str(value) != "all"]]
+    else:
+        raise ValueError("sfg.species_channels must be 'all' or a non-empty list.")
+    unknown = [value for value in species if value != "all" and value not in OXYGEN_SPECIES_ORDER]
+    if unknown:
+        raise ValueError(f"Unknown SFG oxygen species channels: {unknown}")
+    if len(species) != len(set(species)):
+        raise ValueError("sfg.species_channels cannot contain duplicate species labels.")
+
+    channels: dict[str, dict[str, Any]] = {}
+    for raw_bin in raw_bins:
+        if not isinstance(raw_bin, dict) or not raw_bin.get("label"):
+            raise ValueError("Every sfg.layer_bins entry requires a non-empty label.")
+        label = str(raw_bin["label"])
+        window = raw_bin.get("window")
+        if label != "all" and not isinstance(window, dict):
+            raise ValueError(f"sfg.layer_bins entry {label!r} requires a window mapping.")
+        if label == "all" and window is not None:
+            raise ValueError("The all layer must omit window so it includes every z coordinate.")
+        for species_name in species:
+            suffix = "all" if species_name == "all" else ("nh1" if species_name == "OH-" else species_name)
+            channel_name = f"{label}:{suffix}"
+            if channel_name in channels:
+                raise ValueError(f"Duplicate SFG layer/species channel: {channel_name}")
+            channels[channel_name] = {"label": label, "window": window, "species": species_name}
+    return channels
+
+
 def build_sfg_segments_python(
     frames: list[TrajectoryFrame],
     *,
@@ -356,6 +499,96 @@ def build_sfg_segments_python(
         )
         if stage_timings is not None:
             stage_timings["Segment signal construction"] += time.perf_counter() - signal_start
+
+    segments.extend(active_segments.values())
+    return segments
+
+
+def build_layered_sfg_segments_python(
+    frames: list[TrajectoryFrame],
+    *,
+    velocities: np.ndarray,
+    zrefs: np.ndarray,
+    cell: tuple[float, float, float],
+    sfg_cfg: dict[str, Any],
+    context: SelectionContext,
+    pbc: tuple[bool, bool, bool],
+    oxygen_symbol: str,
+    hydrogen_symbol: str,
+    oh_cutoff: float,
+    oh_assignment: str,
+    mu_mode: str,
+    channel_specs: dict[str, dict[str, Any]],
+) -> list[_LayeredSegment]:
+    """Build shared H-O segments with one per-frame mask per output channel."""
+
+    active_oxygen_by_h: dict[int, int] = {}
+    active_segments: dict[int, _LayeredSegment] = {}
+    segments: list[_LayeredSegment] = []
+    channel_names = tuple(channel_specs)
+    for frame_index, frame in enumerate(frames):
+        assigned = assign_sfg_hydrogens_for_frame(
+            frame,
+            cell=cell,
+            pbc=pbc,
+            context=context,
+            oxygen_symbol=oxygen_symbol,
+            hydrogen_symbol=hydrogen_symbol,
+            oh_cutoff=oh_cutoff,
+            oh_assignment=oh_assignment,
+            neighbor_method=str(sfg_cfg.get("neighbor_method", "auto")),
+            neighbor_workers=int(sfg_cfg.get("neighbor_workers", 1)),
+            oxygen_chunk_size=int(sfg_cfg.get("oxygen_chunk_size", 2048)),
+            duplicate_policy=(
+                "nearest"
+                if oh_assignment == "nearest_oxygen"
+                else str(sfg_cfg.get("duplicate_hydrogen_policy", "nearest"))
+            ),
+        )
+        missing_hydrogens = set(active_segments) - set(assigned)
+        for hydrogen_index in missing_hydrogens:
+            segments.append(active_segments.pop(hydrogen_index))
+            active_oxygen_by_h.pop(hydrogen_index, None)
+
+        oxygen_indices = element_indices(frame, {oxygen_symbol}, context)
+        oxygen_by_species = classify_assigned_oxygen_indices(oxygen_indices, assigned)
+        species_members = {name: set(indices.tolist()) for name, indices in oxygen_by_species.items()}
+        for hydrogen_index, oxygen_index in assigned.items():
+            previous_oxygen = active_oxygen_by_h.get(hydrogen_index)
+            if previous_oxygen != oxygen_index:
+                if hydrogen_index in active_segments:
+                    segments.append(active_segments.pop(hydrogen_index))
+                active_oxygen_by_h[hydrogen_index] = oxygen_index
+                active_segments[hydrogen_index] = _LayeredSegment(
+                    hydrogen_index,
+                    oxygen_index,
+                    mu={name: [] for name in channel_names},
+                    stretch={name: [] for name in channel_names},
+                    masks={name: [] for name in channel_names},
+                )
+
+            r_oh = minimum_image(
+                frame.positions[hydrogen_index] - frame.positions[oxygen_index], cell=cell, pbc=pbc
+            )
+            r_norm = float(np.linalg.norm(r_oh))
+            if r_norm <= 1e-12:
+                continue
+            vrel = velocities[frame_index, hydrogen_index] - velocities[frame_index, oxygen_index]
+            stretch = float(np.dot(vrel, r_oh) / r_norm)
+            cos_theta = float(r_oh[2] / r_norm)
+            zprime = float(frame.positions[oxygen_index, 2] - zrefs[frame_index])
+            segment = active_segments[hydrogen_index]
+            for channel_name, spec in channel_specs.items():
+                window = spec["window"] if spec["label"] != "all" else None
+                factor = window_factor(zprime, {"window": window}) if window is not None else 1.0
+                is_species = spec["species"] == "all" or oxygen_index in species_members[spec["species"]]
+                mask = bool(is_species and factor != 0.0)
+                signal = factor * (stretch * cos_theta if mu_mode == "stretch" else float(vrel[2]))
+                if bool(sfg_cfg.get("flip_sign", False)):
+                    signal *= -1.0
+                segment.mu[channel_name].append(float(signal))
+                segment.stretch[channel_name].append(stretch)
+                segment.masks[channel_name].append(mask)
 
     segments.extend(active_segments.values())
     return segments
@@ -477,6 +710,42 @@ def correlate_sfg_segments_python(
     counts = np.zeros(max_lag + 1, dtype=np.int64)
     for segment in segments:
         accumulate_segment(segment, sums=sums, counts=counts, max_lag=max_lag, symmetrize=symmetrize)
+    return sums, counts
+
+
+def correlate_layered_sfg_segments_python(
+    segments: list[_LayeredSegment],
+    *,
+    channel_name: str,
+    max_lag: int,
+    symmetrize: bool,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Correlate one layered channel with the legacy per-frame mask semantics."""
+
+    sums = np.zeros(max_lag + 1, dtype=float)
+    counts = np.zeros(max_lag + 1, dtype=np.int64)
+    for segment in segments:
+        mu = np.asarray(segment.mu[channel_name], dtype=float)
+        stretch = np.asarray(segment.stretch[channel_name], dtype=float)
+        mask = np.asarray(segment.masks[channel_name], dtype=bool)
+        if mu.size < 2:
+            continue
+        lag_max = min(max_lag, mu.size - 1)
+        masked_mu = mu * mask
+        masked_stretch = stretch * mask
+        for lag in range(lag_max + 1):
+            n = mu.size - lag
+            count = int(np.count_nonzero(mask[:n]))
+            if count == 0:
+                continue
+            correlation = float(np.dot(masked_mu[:n], stretch[lag : lag + n]))
+            if symmetrize:
+                correlation += float(np.dot(masked_stretch[:n], mu[lag : lag + n]))
+                sums[lag] += 2.0 * correlation
+                counts[lag] += 2 * count
+            else:
+                sums[lag] += correlation
+                counts[lag] += count
     return sums, counts
 
 

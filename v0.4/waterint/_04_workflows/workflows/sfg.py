@@ -4,12 +4,14 @@ from pathlib import Path
 from typing import Any
 
 from waterint.config import require_mapping
+from waterint._00_io.common import TrajectoryFrame
 from waterint._01_core.selection import SelectionContext
 from waterint._03_output.sfg import plot_overlay, plot_spectrum
 from waterint._02_computation.sfg import (
     SfgResult,
     combine_cf,
     compute_ft,
+    compute_layered_ssvvcf_from_frames,
     compute_ssvvcf_from_frames,
     load_cf,
     write_cf,
@@ -172,6 +174,17 @@ def run_trajectory(config: dict[str, Any], sfg_cfg: dict[str, Any], output_cfg: 
     compute_cfg = dict(sfg_cfg)
     if compute_cfg.get("zref_file"):
         compute_cfg["zref_file"] = resolve_path(config, compute_cfg["zref_file"])
+    if "layer_bins" in compute_cfg:
+        return run_layered_trajectory(
+            config=config,
+            input_cfg=input_cfg,
+            frames=frames,
+            cell=cell,
+            sfg_cfg=compute_cfg,
+            output_cfg=output_cfg,
+            outdir=outdir,
+            prefix=prefix,
+        )
     calc = compute_ssvvcf_from_frames(
         frames,
         cell=cell,
@@ -214,6 +227,90 @@ def run_trajectory(config: dict[str, Any], sfg_cfg: dict[str, Any], output_cfg: 
     )
     write_sfg_metadata(result.metadata_path, config=config, result=result, velocity_source=calc.velocity_source)
     return result
+
+
+def run_layered_trajectory(
+    *,
+    config: dict[str, Any],
+    input_cfg: dict[str, Any],
+    frames: list[TrajectoryFrame],
+    cell: tuple[float, float, float],
+    sfg_cfg: dict[str, Any],
+    output_cfg: dict[str, Any],
+    outdir: Path,
+    prefix: str,
+) -> SfgResult:
+    """Write one all-OH and species CF/FT pair for every configured layer."""
+
+    requested_backend = str(sfg_cfg.get("backend", "auto")).lower()
+    if requested_backend not in {"auto", "python", "cpp"}:
+        raise ValueError("sfg.backend must be auto, python, or cpp.")
+    if requested_backend == "cpp":
+        raise ValueError("sfg.layer_bins currently requires the Python backend; use backend: auto or python.")
+    calc = compute_layered_ssvvcf_from_frames(
+        frames,
+        cell=cell,
+        sfg_cfg=sfg_cfg,
+        context=SelectionContext.from_input_config(input_cfg),
+    )
+    run_label = output_cfg.get("run_label")
+    filename_prefix = f"{prefix}_"
+    cf_paths: dict[str, Path] = {}
+    ft_paths: dict[str, Path] = {}
+    png_paths: dict[str, Path] = {}
+    for channel_name, channel in calc.channels.items():
+        layer, species = channel_name.split(":", 1)
+        stem = f"{filename_prefix}{layer}"
+        if run_label:
+            stem += f"_{run_label}"
+        if species != "all":
+            stem += f"_cf_{species_token(species)}"
+        cf_path = outdir / f"{stem}.dat"
+        write_cf(cf_path, channel.time_ps, channel.corr, channel.counts)
+        cf_paths[channel_name] = cf_path
+        frequency, signal = compute_ft(
+            channel.time_ps,
+            channel.corr,
+            time_unit="ps",
+            nzeros=int(sfg_cfg.get("nzeros", 2000)),
+        )
+        ft_path = outdir / f"{stem}_FT.dat"
+        write_ft(ft_path, frequency, signal)
+        ft_paths[channel_name] = ft_path
+        if bool(output_cfg.get("plot", True)):
+            png_path = outdir / f"{stem}_FT.png"
+            plot_spectrum(
+                path=png_path,
+                freq_cm=frequency,
+                signal=signal,
+                xmin=float(output_cfg.get("xmin", 0.0)),
+                xmax=float(output_cfg.get("xmax", 4500.0)),
+                flip=bool(output_cfg.get("flip", True)),
+                title=f"{output_cfg.get('title', prefix)}: {channel_name}",
+                dpi=int(output_cfg.get("dpi", 220)),
+            )
+            png_paths[channel_name] = png_path
+
+    zref_path = outdir / f"{prefix}_zref.dat"
+    write_zrefs(zref_path, frames, calc.zrefs)
+    cf_paths["zref"] = zref_path
+    result = SfgResult(
+        "trajectory_layered",
+        cf_paths,
+        ft_paths,
+        png_paths,
+        outdir / f"{prefix}_metadata.json",
+    )
+    write_sfg_metadata(result.metadata_path, config=config, result=result, velocity_source=calc.velocity_source)
+    return result
+
+
+def species_token(species: str) -> str:
+    """Keep the established hydroxide filename while making other names safe."""
+
+    if species == "OH-":
+        return "nh1"
+    return species.lower().replace("+", "plus").replace("-", "minus").replace("_", "")
 
 
 def write_sfg_metadata(

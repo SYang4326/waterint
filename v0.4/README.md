@@ -73,6 +73,40 @@ sfg:
 
 The native SFG path reuses the shared C++ O-H cell list and accelerates finite-difference velocities, O-H assignment, continuous bond-segment construction, and segment correlation. Python retains config handling, trajectory loading, z-reference calculation, Fourier transformation, plotting, and file output. The C++ path requires fixed atom types and ordering; `auto` falls back to Python for variable-topology trajectories.
 
+### Layer- and species-resolved SFG
+
+Set `sfg.layer_bins` to write a separate ssVVCF and spectrum for each named
+z window. Every layer always includes an all-O-H channel. `species_channels`
+adds channels selected from the existing oxygen-species labels (`O2-`, `OH-`,
+`H2O`, `H3O+`, and `O_other`) using the same H-to-O assignment as SFG. The
+legacy hydroxide filename token is `nh1` and means one assigned H per oxygen;
+it is a species label, not a layer number.
+
+```yaml
+sfg:
+  mode: trajectory
+  backend: auto
+  layer_bins:
+    - label: 0_1d5
+      window: {mode: 2, z1: 0.0, z2: 1.5, ramp: 0.0}
+    - label: 1d5_2d8
+      window: {mode: 2, z1: 1.5, z2: 2.8, ramp: 0.0}
+    - label: all
+  species_channels: [OH-]
+
+output:
+  prefix: ssvvcf
+  run_label: 900ps
+```
+
+This writes `ssvvcf_0_1d5_900ps.dat` for all O-H bonds and
+`ssvvcf_0_1d5_900ps_cf_nh1.dat` for OH-. These names are accepted directly by
+the existing `sfg.mode: combine_bins` workflow with `cf_prefix: ssvvcf`.
+Layered channels use the Python segment implementation because the current C++
+kernel has a single scalar window. `backend: auto` selects this path; requesting
+`backend: cpp` with `layer_bins` raises a clear error. The included runnable
+configuration is `example/mgo_sfg/config_layered_sfg_quick.yaml`.
+
 For a LAMMPS dump containing all of `vx vy vz`, SFG can use the stored velocities directly instead of estimating them from positions:
 
 ```yaml

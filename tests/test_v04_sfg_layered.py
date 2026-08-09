@@ -58,7 +58,10 @@ class V04LayeredSfgTests(unittest.TestCase):
 
     def test_layered_channels_reuse_assignment_and_masks(self) -> None:
         sfg = importlib.import_module("waterint._02_computation.sfg")
+        native = importlib.import_module("waterint._02_computation._native")
         selection_context = importlib.import_module("waterint._01_core.selection").SelectionContext
+        if not native.native_status()["available"]:
+            self.skipTest("C++ compiler or native backend is not available.")
         cfg = {
             "dt_ps": 0.1,
             "lag_ps": 0.2,
@@ -76,9 +79,15 @@ class V04LayeredSfgTests(unittest.TestCase):
             "species_channels": ["OH-"],
             "symmetrize": True,
         }
-        result = sfg.compute_layered_ssvvcf_from_frames(
-            self._frames(), cell=(20.0, 20.0, 20.0), sfg_cfg=cfg, context=selection_context({})
-        )
+        results = {}
+        for backend in ["python", "cpp"]:
+            results[backend] = sfg.compute_layered_ssvvcf_from_frames(
+                self._frames(),
+                cell=(20.0, 20.0, 20.0),
+                sfg_cfg={**cfg, "backend": backend},
+                context=selection_context({}),
+            )
+        result = results["python"]
         self.assertEqual(set(result.channels), {"low:all", "low:nh1", "high:all", "high:nh1", "all:all", "all:nh1"})
         self.assertEqual(result.channels["low:all"].counts[0], 10)
         self.assertEqual(result.channels["high:all"].counts[0], 20)
@@ -86,6 +95,17 @@ class V04LayeredSfgTests(unittest.TestCase):
         self.assertEqual(result.channels["high:nh1"].counts[0], 0)
         self.assertEqual(result.channels["all:all"].counts[0], 30)
         self.assertEqual(result.channels["all:nh1"].counts[0], 10)
+        for channel_name in result.channels:
+            np.testing.assert_array_equal(
+                results["cpp"].channels[channel_name].counts,
+                results["python"].channels[channel_name].counts,
+            )
+            np.testing.assert_allclose(
+                results["cpp"].channels[channel_name].corr,
+                results["python"].channels[channel_name].corr,
+                rtol=1e-12,
+                atol=1e-12,
+            )
 
     def test_layered_config_validation(self) -> None:
         sfg = importlib.import_module("waterint._02_computation.sfg")
@@ -96,19 +116,75 @@ class V04LayeredSfgTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "all layer must omit"):
             sfg.layered_channel_specs({"layer_bins": [{"label": "all", "window": {}}]})
 
-    def test_layered_cpp_backend_is_rejected_clearly(self) -> None:
-        workflow = importlib.import_module("waterint._04_workflows.workflows.sfg")
-        with self.assertRaisesRegex(ValueError, "requires the Python backend"):
-            workflow.run_layered_trajectory(
-                config={},
-                input_cfg={},
-                frames=[],
+    def test_cpp_tracks_dynamic_nh1_membership(self) -> None:
+        sfg = importlib.import_module("waterint._02_computation.sfg")
+        native = importlib.import_module("waterint._02_computation._native")
+        selection_context = importlib.import_module("waterint._01_core.selection").SelectionContext
+        if not native.native_status()["available"]:
+            self.skipTest("C++ compiler or native backend is not available.")
+        cfg = {
+            "dt_ps": 0.1,
+            "lag_ps": 0.2,
+            "velocity_source": "trajectory",
+            "trajectory_velocity_unit": "A/ps",
+            "oh_assignment": "nearest_oxygen",
+            "oh_cutoff": 1.25,
+            "z_ref0": 0.0,
+            "pbc": [False, False, False],
+            "layer_bins": [{"label": "all"}],
+            "species_channels": "all",
+            "symmetrize": True,
+        }
+        results = {}
+        for backend in ["python", "cpp"]:
+            results[backend] = sfg.compute_layered_ssvvcf_from_frames(
+                self._dynamic_frames(),
                 cell=(20.0, 20.0, 20.0),
-                sfg_cfg={"backend": "cpp"},
-                output_cfg={},
-                outdir=Path("."),
-                prefix="test",
+                sfg_cfg={**cfg, "backend": backend},
+                context=selection_context({}),
             )
+        self.assertEqual(int(results["python"].channels["all:all"].counts[0]), 24)
+        self.assertEqual(int(results["python"].channels["all:nh1"].counts[0]), 12)
+        self.assertEqual(int(results["python"].channels["all:H2O"].counts[0]), 12)
+        for channel_name in results["python"].channels:
+            np.testing.assert_array_equal(
+                results["cpp"].channels[channel_name].counts,
+                results["python"].channels[channel_name].counts,
+            )
+            np.testing.assert_allclose(
+                results["cpp"].channels[channel_name].corr,
+                results["python"].channels[channel_name].corr,
+                rtol=1e-12,
+                atol=1e-12,
+            )
+
+    @staticmethod
+    def _dynamic_frames() -> list:
+        trajectory_frame = importlib.import_module("waterint._00_io.common").TrajectoryFrame
+        frames = []
+        symbols = ["O", "O", "H", "H"]
+        velocities = np.asarray(
+            [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, 2.0]],
+            dtype=float,
+        )
+        for index in range(6):
+            hydrogen_1 = [5.0, 0.0, 3.9] if index < 3 else [0.0, 0.0, 1.1]
+            positions = np.asarray(
+                [[0.0, 0.0, 1.0], [5.0, 0.0, 3.0], [0.0, 0.0, 1.9], hydrogen_1],
+                dtype=float,
+            )
+            frames.append(
+                trajectory_frame(
+                    index=index,
+                    comment="",
+                    symbols=symbols,
+                    positions=positions,
+                    cell=(20.0, 20.0, 20.0),
+                    step=index,
+                    velocities=velocities.copy(),
+                )
+            )
+        return frames
 
     def test_layered_workflow_writes_combine_bins_compatible_names(self) -> None:
         workflow = importlib.import_module("waterint._04_workflows.workflows.sfg")

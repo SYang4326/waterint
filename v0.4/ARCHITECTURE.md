@@ -91,13 +91,14 @@ sfg:
 
 The SFG C++ kernel uses `CutoffNeighborSearch` for O-H assignment and owns direct trajectory-velocity ingestion or finite-difference velocities, continuous O-H segment management, windowed signal construction, and FFT-based segment correlation. Python owns config and trajectory orchestration, z-reference calculation, final normalization, Fourier transformation, plotting, and output. The native route requires fixed atom types and ordering; `auto` uses the Python implementation when that contract is not satisfied. LAMMPS readers retain `vx/vy/vz` when all three fields are present, and NPZ conversion preserves them.
 
-`sfg.layer_bins` enables multi-channel layer/species ssVVCF. It intentionally
-uses the Python segment path: one continuous H-O segment carries a per-frame
-window/species mask for every requested output channel. Species membership is
-derived from the already-resolved SFG H-to-O assignment, rather than running a
-second neighbor search. The current C++ ABI owns one scalar window and is kept
-for the existing single-window workflow; `sfg.backend: cpp` is rejected for
-layered output until a matching multi-channel native kernel exists.
+`sfg.layer_bins` enables multi-channel layer/species ssVVCF. The layered C++
+ABI keeps one continuous H-O segment with a per-frame window/species mask for
+every requested output channel and accumulates each channel separately.
+Species membership is derived from the unique H-to-O assignment on every
+frame, so `nh1` follows proton transfer rather than a fixed atom selection.
+The existing single-window ABI remains available for compatibility. Python
+implements the same mask semantics and is the fallback for variable topology
+or unavailable native compilation.
 
 The native library is generated on demand under `waterint/_native/`. Normal users can still run without compiling C++ code because `auto` falls back to Python.
 

@@ -30,7 +30,8 @@ installations that fall back to Python:
 
 `mgo_sfg/config_layered_sfg_quick.yaml` is a short layer- and hydroxide-
 resolved SFG configuration. It writes the all-O-H and `nh1` (OH-) channel for
-each configured z bin. Layered SFG currently uses the Python segment path.
+each configured z bin. Fixed-topology input uses the native multi-channel
+kernel; Python provides the equivalent fallback path.
 
 `mgo_sfg/config_100ps_npz_full.yaml` is included for the full 100 ps SFG run,
 but it is not part of the default example command. On the benchmark machine,

@@ -558,6 +558,147 @@ def sfg_ssvvcf(
     return sums, counts, stage_seconds
 
 
+def sfg_layered_ssvvcf(
+    positions: np.ndarray,
+    velocities: np.ndarray | None,
+    oxygen_indices: np.ndarray,
+    hydrogen_indices: np.ndarray,
+    zrefs: np.ndarray,
+    *,
+    dt_ps: float,
+    max_lag: int,
+    oh_cutoff: float,
+    oh_assignment: str,
+    cell: tuple[float, float, float],
+    pbc: tuple[bool, bool, bool],
+    mu_mode: str,
+    symmetrize: bool,
+    flip_sign: bool,
+    duplicate_policy: str,
+    channel_specs: dict[str, dict],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """Call the multi-channel C++ SFG kernel.
+
+    Rows in the returned sums/counts arrays retain ``channel_specs`` order.
+    Species membership is evaluated natively from the unique H-to-O assignment
+    on every frame.
+    """
+
+    lib = native_library()
+    if lib is None:
+        return None
+
+    positions_array = np.ascontiguousarray(positions, dtype=np.float64)
+    velocities_array = None if velocities is None else np.ascontiguousarray(velocities, dtype=np.float64)
+    oxygen_array = np.ascontiguousarray(oxygen_indices, dtype=np.int64)
+    hydrogen_array = np.ascontiguousarray(hydrogen_indices, dtype=np.int64)
+    zref_array = np.ascontiguousarray(zrefs, dtype=np.float64)
+    if positions_array.ndim != 3 or positions_array.shape[2] != 3:
+        raise ValueError("positions must have shape (n_frames, n_atoms, 3).")
+    if velocities_array is not None and velocities_array.shape != positions_array.shape:
+        raise ValueError("velocities must have the same shape as positions.")
+    if oxygen_array.ndim != 1 or hydrogen_array.ndim != 1:
+        raise ValueError("oxygen_indices and hydrogen_indices must be one-dimensional.")
+    if zref_array.shape != (positions_array.shape[0],):
+        raise ValueError("zrefs must contain one value per frame.")
+    if dt_ps <= 0.0 or max_lag < 1 or oh_cutoff <= 0.0:
+        raise ValueError("dt_ps, max_lag, and oh_cutoff must be positive.")
+    if not channel_specs:
+        raise ValueError("channel_specs must contain at least one layered SFG channel.")
+
+    assignment = str(oh_assignment).lower()
+    if assignment not in {"cutoff", "nearest_oxygen"}:
+        raise ValueError("sfg.oh_assignment must be cutoff or nearest_oxygen.")
+    mode = str(mu_mode).lower()
+    if mode not in {"full", "stretch"}:
+        raise ValueError("sfg.mu_mode must be full or stretch.")
+    duplicate = str(duplicate_policy).lower()
+    if duplicate not in {"nearest", "error"}:
+        raise ValueError("sfg.duplicate_hydrogen_policy must be nearest or error.")
+
+    species_code = {"all": 0, "O2-": 1, "OH-": 2, "H2O": 3, "H3O+": 4, "O_other": 5}
+    window_enabled: list[int] = []
+    window_modes: list[int] = []
+    window_z1: list[float] = []
+    window_z2: list[float] = []
+    window_ramps: list[float] = []
+    window_flips: list[int] = []
+    species_codes: list[int] = []
+    for spec in channel_specs.values():
+        window = spec.get("window")
+        window_cfg = {} if window is None else window
+        window_mode = int(window_cfg.get("mode", 1))
+        if window is not None and window_mode not in {1, 2}:
+            raise ValueError("SFG layer window mode must be 1 or 2.")
+        species = str(spec.get("species", "all"))
+        if species not in species_code:
+            raise ValueError(f"Unknown SFG oxygen species channel: {species}")
+        window_enabled.append(0 if window is None else 1)
+        window_modes.append(window_mode)
+        window_z1.append(float(window_cfg.get("z1", 0.0)))
+        window_z2.append(float(window_cfg.get("z2", 0.0)))
+        window_ramps.append(float(window_cfg.get("ramp", 0.0)))
+        window_flips.append(1 if bool(window_cfg.get("flip", False)) else 0)
+        species_codes.append(species_code[species])
+
+    cell_array = np.ascontiguousarray(cell, dtype=np.float64)
+    pbc_array = np.ascontiguousarray([1 if flag else 0 for flag in pbc], dtype=np.uint8)
+    enabled_array = np.ascontiguousarray(window_enabled, dtype=np.uint8)
+    modes_array = np.ascontiguousarray(window_modes, dtype=np.int32)
+    z1_array = np.ascontiguousarray(window_z1, dtype=np.float64)
+    z2_array = np.ascontiguousarray(window_z2, dtype=np.float64)
+    ramps_array = np.ascontiguousarray(window_ramps, dtype=np.float64)
+    flips_array = np.ascontiguousarray(window_flips, dtype=np.uint8)
+    species_array = np.ascontiguousarray(species_codes, dtype=np.int32)
+    if cell_array.shape != (3,) or pbc_array.shape != (3,):
+        raise ValueError("cell and pbc must each contain three values.")
+
+    shape = (len(channel_specs), max_lag + 1)
+    sums = np.zeros(shape, dtype=np.float64)
+    counts = np.zeros(shape, dtype=np.int64)
+    stage_seconds = np.zeros(4, dtype=np.float64)
+    status = lib.waterint_sfg_layered_ssvvcf(
+        positions_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+        None if velocities_array is None else velocities_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+        ctypes.c_size_t(positions_array.shape[0]),
+        ctypes.c_size_t(positions_array.shape[1]),
+        oxygen_array.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
+        ctypes.c_size_t(oxygen_array.size),
+        hydrogen_array.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
+        ctypes.c_size_t(hydrogen_array.size),
+        zref_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+        ctypes.c_double(float(dt_ps)),
+        ctypes.c_size_t(int(max_lag)),
+        ctypes.c_double(float(oh_cutoff)),
+        ctypes.c_int(1 if assignment == "nearest_oxygen" else 0),
+        cell_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+        pbc_array.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+        ctypes.c_int(1 if mode == "stretch" else 0),
+        ctypes.c_int(1 if symmetrize else 0),
+        ctypes.c_int(1 if flip_sign else 0),
+        ctypes.c_int(1 if duplicate == "error" else 0),
+        ctypes.c_size_t(len(channel_specs)),
+        enabled_array.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+        modes_array.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
+        z1_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+        z2_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+        ramps_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+        flips_array.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+        species_array.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
+        sums.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+        counts.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
+        stage_seconds.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+    )
+    if status == 4:
+        raise ValueError(
+            "A hydrogen is assigned to more than one oxygen. "
+            "Use sfg.duplicate_hydrogen_policy: nearest or lower sfg.oh_cutoff."
+        )
+    if status != 0:
+        raise RuntimeError(f"C++ layered SFG ssVVCF kernel failed with status {status}.")
+    return sums, counts, stage_seconds
+
+
 def accumulate_oh_orientation_from_neighbors(
     oxygen_positions: np.ndarray,
     hydrogen_positions: np.ndarray,
@@ -896,6 +1037,39 @@ def native_library() -> ctypes.CDLL | None:
             ctypes.POINTER(ctypes.c_double),
         ]
         lib.waterint_sfg_ssvvcf.restype = ctypes.c_int
+        lib.waterint_sfg_layered_ssvvcf.argtypes = [
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.c_size_t,
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_int64),
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_int64),
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.c_double,
+            ctypes.c_size_t,
+            ctypes.c_double,
+            ctypes.c_int,
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_uint8),
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_uint8),
+            ctypes.POINTER(ctypes.c_int32),
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_uint8),
+            ctypes.POINTER(ctypes.c_int32),
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_int64),
+            ctypes.POINTER(ctypes.c_double),
+        ]
+        lib.waterint_sfg_layered_ssvvcf.restype = ctypes.c_int
         lib.waterint_accumulate_oh_orientation.argtypes = [
             ctypes.POINTER(ctypes.c_double),
             ctypes.c_size_t,

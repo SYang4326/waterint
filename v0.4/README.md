@@ -102,10 +102,13 @@ output:
 This writes `ssvvcf_0_1d5_900ps.dat` for all O-H bonds and
 `ssvvcf_0_1d5_900ps_cf_nh1.dat` for OH-. These names are accepted directly by
 the existing `sfg.mode: combine_bins` workflow with `cf_prefix: ssvvcf`.
-Layered channels use the Python segment implementation because the current C++
-kernel has a single scalar window. `backend: auto` selects this path; requesting
-`backend: cpp` with `layer_bins` raises a clear error. The included runnable
-configuration is `example/mgo_sfg/config_layered_sfg_quick.yaml`.
+For fixed-topology trajectories, layered channels use the native multi-channel
+kernel with one per-frame layer/species mask and accumulator per output. The
+`nh1` mask is dynamic: C++ resolves the unique H-to-O assignment on every frame
+and selects an O-H bond only when that oxygen has exactly one assigned H at
+that frame. `backend: auto` falls back to the equivalent Python segment path
+when native compilation or fixed topology is unavailable. The included
+runnable configuration is `example/mgo_sfg/config_layered_sfg_quick.yaml`.
 
 For a LAMMPS dump containing all of `vx vy vz`, SFG can use the stored velocities directly instead of estimating them from positions:
 

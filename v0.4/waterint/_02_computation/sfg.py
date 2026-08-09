@@ -9,7 +9,7 @@ import numpy as np
 from scipy.fftpack import dct
 
 from waterint.chemistry import oxygen_hydrogen_neighbors_by_species
-from waterint._02_computation._native import sfg_ssvvcf
+from waterint._02_computation._native import sfg_layered_ssvvcf, sfg_ssvvcf
 from waterint._00_io.common import TrajectoryFrame
 from waterint._01_core.coordinates import fixed_reference_value, slab_surface_reference
 from waterint._01_core.selection import SelectionContext, element_indices, element_mask
@@ -318,12 +318,7 @@ def compute_layered_ssvvcf_from_frames(
     sfg_cfg: dict[str, Any],
     context: SelectionContext,
 ) -> LayeredSsvvcfResult:
-    """Compute layer- and oxygen-species-resolved SFG correlations in Python.
-
-    The current native SFG kernel owns one scalar window. Multi-channel output
-    therefore uses the established Python segment path, which lets every bond
-    carry a per-frame mask for each layer/species channel.
-    """
+    """Compute layer- and dynamic oxygen-species-resolved SFG correlations."""
 
     if len(frames) < 3:
         raise ValueError("SFG trajectory mode needs at least three frames for finite-difference velocities.")
@@ -349,8 +344,69 @@ def compute_layered_ssvvcf_from_frames(
     mu_mode = str(sfg_cfg.get("mu_mode", "full")).lower()
     if mu_mode not in {"full", "stretch"}:
         raise ValueError("sfg.mu_mode must be full or stretch.")
+    backend = str(sfg_cfg.get("backend", "auto")).lower()
+    if backend not in {"auto", "python", "cpp"}:
+        raise ValueError("sfg.backend must be auto, python, or cpp.")
 
     zrefs = zref_series(frames, sfg_cfg, context)
+    first = frames[0]
+    oxygen_indices = element_indices(first, {oxygen_symbol}, context)
+    hydrogen_indices = element_indices(first, {hydrogen_symbol}, context)
+    if oxygen_indices.size == 0 or hydrogen_indices.size == 0:
+        raise ValueError("SFG trajectory mode could not find O/H atoms. Check input.type_map and sfg symbols.")
+    fixed_topology = selection_is_fixed(frames, first)
+    if backend == "cpp" and not fixed_topology:
+        raise ValueError("sfg.backend: cpp requires fixed atom types/order across trajectory frames.")
+    trajectory_velocities = trajectory_velocities_from_frames(frames, sfg_cfg=sfg_cfg)
+    if backend in {"auto", "cpp"} and fixed_topology:
+        native_result = sfg_layered_ssvvcf(
+            contiguous_frame_positions(frames),
+            trajectory_velocities,
+            oxygen_indices,
+            hydrogen_indices,
+            zrefs,
+            dt_ps=dt_ps,
+            max_lag=max_lag,
+            oh_cutoff=oh_cutoff,
+            oh_assignment=oh_assignment,
+            cell=cell,
+            pbc=pbc,
+            mu_mode=mu_mode,
+            symmetrize=bool(sfg_cfg.get("symmetrize", True)),
+            flip_sign=bool(sfg_cfg.get("flip_sign", False)),
+            duplicate_policy=(
+                "nearest"
+                if oh_assignment == "nearest_oxygen"
+                else str(sfg_cfg.get("duplicate_hydrogen_policy", "nearest"))
+            ),
+            channel_specs=channel_specs,
+        )
+        if native_result is not None:
+            native_sums, native_counts, _stage_seconds = native_result
+            time_ps = np.arange(max_lag + 1, dtype=float) * dt_ps
+            velocity_source = "trajectory" if trajectory_velocities is not None else "finite_difference"
+            channels: dict[str, SsvvcfResult] = {}
+            for row, channel_name in enumerate(channel_specs):
+                corr = np.zeros(max_lag + 1, dtype=float)
+                nonzero = native_counts[row] > 0
+                corr[nonzero] = native_sums[row, nonzero] / native_counts[row, nonzero]
+                channels[channel_name] = SsvvcfResult(
+                    time_ps=time_ps,
+                    corr=corr,
+                    counts=native_counts[row].copy(),
+                    zrefs=zrefs,
+                    frames=len(frames),
+                    velocity_source=velocity_source,
+                )
+            return LayeredSsvvcfResult(
+                channels=channels,
+                zrefs=zrefs,
+                frames=len(frames),
+                velocity_source=velocity_source,
+            )
+        if backend == "cpp":
+            raise RuntimeError("C++ layered SFG backend is not available.")
+
     velocities, velocity_source = sfg_velocities_from_frames(frames, sfg_cfg=sfg_cfg, cell=cell, pbc=pbc)
     segments = build_layered_sfg_segments_python(
         frames,

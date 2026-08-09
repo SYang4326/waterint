@@ -245,8 +245,6 @@ def run_layered_trajectory(
     requested_backend = str(sfg_cfg.get("backend", "auto")).lower()
     if requested_backend not in {"auto", "python", "cpp"}:
         raise ValueError("sfg.backend must be auto, python, or cpp.")
-    if requested_backend == "cpp":
-        raise ValueError("sfg.layer_bins currently requires the Python backend; use backend: auto or python.")
     calc = compute_layered_ssvvcf_from_frames(
         frames,
         cell=cell,

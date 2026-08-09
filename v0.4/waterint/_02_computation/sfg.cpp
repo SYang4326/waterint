@@ -493,3 +493,337 @@ extern "C" int waterint_sfg_ssvvcf(
     }
     return 0;
 }
+
+namespace {
+
+struct LayeredSegment {
+    std::int64_t oxygen = -1;
+    std::vector<std::vector<double>> mu;
+    std::vector<double> stretch;
+    std::vector<std::vector<std::uint8_t>> masks;
+
+    void reset(std::size_t n_channels) {
+        oxygen = -1;
+        mu.assign(n_channels, {});
+        stretch.clear();
+        masks.assign(n_channels, {});
+    }
+};
+
+bool species_matches(int species_code, std::int64_t hydrogen_count) {
+    if (species_code == 0) return true;
+    if (species_code == 1) return hydrogen_count == 0;
+    if (species_code == 2) return hydrogen_count == 1;
+    if (species_code == 3) return hydrogen_count == 2;
+    if (species_code == 4) return hydrogen_count >= 3;
+    return false;
+}
+
+void accumulate_layered_segment(
+    LayeredSegment* segment,
+    std::size_t n_channels,
+    std::size_t max_lag,
+    bool symmetrize,
+    double* sums,
+    std::int64_t* counts
+) {
+    const std::size_t length = segment->stretch.size();
+    if (length >= 2) {
+        const std::size_t lag_limit = std::min(max_lag, length - 1);
+        for (std::size_t channel = 0; channel < n_channels; ++channel) {
+            std::vector<double> masked_mu(length, 0.0);
+            std::vector<double> masked_stretch(length, 0.0);
+            std::vector<std::int64_t> mask_prefix(length + 1, 0);
+            for (std::size_t frame = 0; frame < length; ++frame) {
+                const bool selected = segment->masks[channel][frame] != 0;
+                if (selected) {
+                    masked_mu[frame] = segment->mu[channel][frame];
+                    masked_stretch[frame] = segment->stretch[frame];
+                }
+                mask_prefix[frame + 1] = mask_prefix[frame] + (selected ? 1 : 0);
+            }
+            const std::vector<double> forward = cross_correlation_fft(
+                masked_mu, segment->stretch, lag_limit, false
+            );
+            std::vector<double> reverse;
+            if (symmetrize) {
+                reverse = cross_correlation_fft(
+                    masked_stretch, segment->mu[channel], lag_limit, false
+                );
+            }
+            const std::size_t offset = channel * (max_lag + 1);
+            for (std::size_t lag = 0; lag <= lag_limit; ++lag) {
+                const std::int64_t samples = mask_prefix[length - lag];
+                if (samples == 0) continue;
+                if (symmetrize) {
+                    sums[offset + lag] += 2.0 * (forward[lag] + reverse[lag]);
+                    counts[offset + lag] += 2 * samples;
+                } else {
+                    sums[offset + lag] += forward[lag];
+                    counts[offset + lag] += samples;
+                }
+            }
+        }
+    }
+    segment->reset(n_channels);
+}
+
+}  // namespace
+
+// Multi-channel layer/species ssVVCF. Species codes are evaluated from the
+// unique per-frame H-to-O assignment: 0=all, 1=O2-, 2=OH-, 3=H2O,
+// 4=H3O+ (three or more H), 5=O_other.
+extern "C" int waterint_sfg_layered_ssvvcf(
+    const double* positions,
+    const double* supplied_velocities,
+    std::size_t n_frames,
+    std::size_t n_atoms,
+    const std::int64_t* oxygen_indices,
+    std::size_t n_oxygen,
+    const std::int64_t* hydrogen_indices,
+    std::size_t n_hydrogen,
+    const double* zrefs,
+    double dt_ps,
+    std::size_t max_lag,
+    double oh_cutoff,
+    int nearest_oxygen_assignment,
+    const double* cell,
+    const std::uint8_t* pbc,
+    int mu_mode,
+    int symmetrize,
+    int flip_sign,
+    int duplicate_policy,
+    std::size_t n_channels,
+    const std::uint8_t* window_enabled,
+    const std::int32_t* window_modes,
+    const double* window_z1,
+    const double* window_z2,
+    const double* window_ramps,
+    const std::uint8_t* window_flips,
+    const std::int32_t* species_codes,
+    double* sums,
+    std::int64_t* counts,
+    double* stage_seconds
+) {
+    if (
+        positions == nullptr || oxygen_indices == nullptr || hydrogen_indices == nullptr || zrefs == nullptr ||
+        window_enabled == nullptr || window_modes == nullptr || window_z1 == nullptr || window_z2 == nullptr ||
+        window_ramps == nullptr || window_flips == nullptr || species_codes == nullptr || sums == nullptr ||
+        counts == nullptr || stage_seconds == nullptr || n_frames < 3 || n_atoms == 0 || n_oxygen == 0 ||
+        n_hydrogen == 0 || n_channels == 0 || dt_ps <= 0.0 || oh_cutoff <= 0.0 ||
+        (nearest_oxygen_assignment != 0 && nearest_oxygen_assignment != 1) ||
+        (mu_mode != 0 && mu_mode != 1) || (duplicate_policy != 0 && duplicate_policy != 1)
+    ) {
+        return 1;
+    }
+    for (std::size_t channel = 0; channel < n_channels; ++channel) {
+        if ((window_enabled[channel] != 0 && window_modes[channel] != 1 && window_modes[channel] != 2) ||
+            species_codes[channel] < 0 || species_codes[channel] > 5) {
+            return 1;
+        }
+    }
+    bool use_pbc[3];
+    double cell_lengths[3];
+    if (!parse_pbc(cell, pbc, use_pbc, cell_lengths)) return 2;
+    std::fill(sums, sums + n_channels * (max_lag + 1), 0.0);
+    std::fill(counts, counts + n_channels * (max_lag + 1), 0);
+    std::fill(stage_seconds, stage_seconds + 4, 0.0);
+
+    std::vector<LayeredSegment> active_segments(n_hydrogen);
+    for (LayeredSegment& segment : active_segments) segment.reset(n_channels);
+    std::vector<std::int64_t> active_oxygen(n_hydrogen, -1);
+    std::vector<std::int64_t> assigned_oxygen(n_hydrogen, -1);
+    std::vector<double> assigned_distance2(n_hydrogen, std::numeric_limits<double>::infinity());
+    std::vector<std::int64_t> assignment_count(n_hydrogen, 0);
+    std::vector<std::int64_t> assigned_h_count(n_oxygen, 0);
+    std::vector<double> oxygen_positions(3 * n_oxygen);
+    std::vector<double> hydrogen_positions(3 * n_hydrogen);
+    std::vector<double> oxygen_velocities(3 * n_oxygen);
+    std::vector<double> hydrogen_velocities(3 * n_hydrogen);
+    const auto finalize_segment_timed = [&](LayeredSegment* segment) {
+        const auto start = std::chrono::steady_clock::now();
+        accumulate_layered_segment(
+            segment, n_channels, max_lag, symmetrize != 0, sums, counts
+        );
+        const auto end = std::chrono::steady_clock::now();
+        stage_seconds[3] += std::chrono::duration<double>(end - start).count();
+    };
+
+    for (std::size_t frame = 0; frame < n_frames; ++frame) {
+        const auto assignment_start = std::chrono::steady_clock::now();
+        for (std::size_t local = 0; local < n_oxygen; ++local) {
+            const std::int64_t global = oxygen_indices[local];
+            if (global < 0 || static_cast<std::size_t>(global) >= n_atoms) return 3;
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                oxygen_positions[3 * local + axis] = positions[(frame * n_atoms + global) * 3 + axis];
+            }
+        }
+        for (std::size_t local = 0; local < n_hydrogen; ++local) {
+            const std::int64_t global = hydrogen_indices[local];
+            if (global < 0 || static_cast<std::size_t>(global) >= n_atoms) return 3;
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                hydrogen_positions[3 * local + axis] = positions[(frame * n_atoms + global) * 3 + axis];
+            }
+            assigned_oxygen[local] = -1;
+            assigned_distance2[local] = std::numeric_limits<double>::infinity();
+            assignment_count[local] = 0;
+        }
+
+        const waterint::CutoffNeighborSearch search(
+            oxygen_positions.data(), n_oxygen, hydrogen_positions.data(), n_hydrogen,
+            oh_cutoff, cell_lengths, use_pbc
+        );
+        std::vector<std::vector<std::int64_t>> neighbors(n_oxygen);
+        std::vector<std::int64_t> raw_oxygen_h_counts(n_oxygen, 0);
+        for (std::size_t oxygen = 0; oxygen < n_oxygen; ++oxygen) {
+            const std::vector<std::size_t> local_neighbors = search.collect_indices(oxygen);
+            raw_oxygen_h_counts[oxygen] = static_cast<std::int64_t>(local_neighbors.size());
+            neighbors[oxygen].reserve(local_neighbors.size());
+            for (std::size_t hydrogen : local_neighbors) {
+                neighbors[oxygen].push_back(static_cast<std::int64_t>(hydrogen));
+            }
+        }
+        for (std::size_t species_slot = 0; species_slot < 5; ++species_slot) {
+            for (std::size_t oxygen = 0; oxygen < n_oxygen; ++oxygen) {
+                const std::int64_t h_count = raw_oxygen_h_counts[oxygen];
+                const std::size_t slot = h_count >= 0 && h_count <= 3
+                    ? static_cast<std::size_t>(h_count)
+                    : 4;
+                if (slot != species_slot) continue;
+                for (std::int64_t raw_hydrogen : neighbors[oxygen]) {
+                    const std::size_t hydrogen = static_cast<std::size_t>(raw_hydrogen);
+                    assignment_count[hydrogen] += 1;
+                    const double distance2 = oh_distance2(
+                        oxygen_positions.data(), oxygen, hydrogen_positions.data(), hydrogen,
+                        cell_lengths, use_pbc
+                    );
+                    if (assigned_oxygen[hydrogen] < 0 || distance2 < assigned_distance2[hydrogen]) {
+                        assigned_oxygen[hydrogen] = static_cast<std::int64_t>(oxygen);
+                        assigned_distance2[hydrogen] = distance2;
+                    }
+                }
+            }
+        }
+        if (duplicate_policy == 1) {
+            for (std::size_t hydrogen = 0; hydrogen < n_hydrogen; ++hydrogen) {
+                if (assignment_count[hydrogen] > 1) return 4;
+            }
+        }
+        if (nearest_oxygen_assignment != 0) {
+            for (std::size_t hydrogen = 0; hydrogen < n_hydrogen; ++hydrogen) {
+                if (assigned_oxygen[hydrogen] >= 0) continue;
+                for (std::size_t oxygen = 0; oxygen < n_oxygen; ++oxygen) {
+                    const double distance2 = oh_distance2(
+                        oxygen_positions.data(), oxygen, hydrogen_positions.data(), hydrogen,
+                        cell_lengths, use_pbc
+                    );
+                    if (distance2 < assigned_distance2[hydrogen]) {
+                        assigned_oxygen[hydrogen] = static_cast<std::int64_t>(oxygen);
+                        assigned_distance2[hydrogen] = distance2;
+                    }
+                }
+            }
+        }
+        std::fill(assigned_h_count.begin(), assigned_h_count.end(), 0);
+        for (std::int64_t oxygen : assigned_oxygen) {
+            if (oxygen >= 0) assigned_h_count[static_cast<std::size_t>(oxygen)] += 1;
+        }
+        const auto assignment_end = std::chrono::steady_clock::now();
+        stage_seconds[0] += std::chrono::duration<double>(assignment_end - assignment_start).count();
+
+        const auto velocity_start = std::chrono::steady_clock::now();
+        for (std::size_t oxygen = 0; oxygen < n_oxygen; ++oxygen) {
+            const std::size_t atom = static_cast<std::size_t>(oxygen_indices[oxygen]);
+            if (supplied_velocities != nullptr) {
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    oxygen_velocities[3 * oxygen + axis] = supplied_velocities[(frame * n_atoms + atom) * 3 + axis];
+                }
+            } else {
+                atom_velocity(
+                    positions, n_frames, n_atoms, frame, atom, dt_ps, cell_lengths, use_pbc,
+                    oxygen_velocities.data() + 3 * oxygen
+                );
+            }
+        }
+        for (std::size_t hydrogen = 0; hydrogen < n_hydrogen; ++hydrogen) {
+            const std::size_t atom = static_cast<std::size_t>(hydrogen_indices[hydrogen]);
+            if (supplied_velocities != nullptr) {
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    hydrogen_velocities[3 * hydrogen + axis] = supplied_velocities[(frame * n_atoms + atom) * 3 + axis];
+                }
+            } else {
+                atom_velocity(
+                    positions, n_frames, n_atoms, frame, atom, dt_ps, cell_lengths, use_pbc,
+                    hydrogen_velocities.data() + 3 * hydrogen
+                );
+            }
+        }
+        const auto velocity_end = std::chrono::steady_clock::now();
+        stage_seconds[1] += std::chrono::duration<double>(velocity_end - velocity_start).count();
+
+        const auto signal_start = std::chrono::steady_clock::now();
+        const double correlation_before_signal = stage_seconds[3];
+        for (std::size_t hydrogen = 0; hydrogen < n_hydrogen; ++hydrogen) {
+            const std::int64_t oxygen = assigned_oxygen[hydrogen];
+            if (oxygen < 0) {
+                if (active_oxygen[hydrogen] >= 0) {
+                    finalize_segment_timed(&active_segments[hydrogen]);
+                    active_oxygen[hydrogen] = -1;
+                }
+                continue;
+            }
+            if (active_oxygen[hydrogen] != oxygen) {
+                if (active_oxygen[hydrogen] >= 0) finalize_segment_timed(&active_segments[hydrogen]);
+                active_oxygen[hydrogen] = oxygen;
+                active_segments[hydrogen].oxygen = oxygen;
+            }
+
+            double r_oh[3];
+            double norm2 = 0.0;
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                r_oh[axis] = minimum_image_delta(
+                    hydrogen_positions[3 * hydrogen + axis] - oxygen_positions[3 * oxygen + axis],
+                    cell_lengths[axis], use_pbc[axis]
+                );
+                norm2 += r_oh[axis] * r_oh[axis];
+            }
+            if (!(norm2 > 1.0e-24)) continue;
+            const double norm = std::sqrt(norm2);
+            double stretch = 0.0;
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                stretch += (
+                    hydrogen_velocities[3 * hydrogen + axis] - oxygen_velocities[3 * oxygen + axis]
+                ) * r_oh[axis];
+            }
+            stretch /= norm;
+            const double full_mu = hydrogen_velocities[3 * hydrogen + 2] - oxygen_velocities[3 * oxygen + 2];
+            const double base_mu = mu_mode == 1 ? stretch * r_oh[2] / norm : full_mu;
+            const double zprime = oxygen_positions[3 * oxygen + 2] - zrefs[frame];
+            LayeredSegment& segment = active_segments[hydrogen];
+            segment.stretch.push_back(stretch);
+            for (std::size_t channel = 0; channel < n_channels; ++channel) {
+                const double factor = window_factor(
+                    zprime, window_enabled[channel] != 0, window_modes[channel],
+                    window_z1[channel], window_z2[channel], window_ramps[channel],
+                    window_flips[channel] != 0
+                );
+                double mu = factor * base_mu;
+                if (flip_sign != 0) mu *= -1.0;
+                const bool selected = factor != 0.0 && species_matches(
+                    species_codes[channel], assigned_h_count[static_cast<std::size_t>(oxygen)]
+                );
+                segment.mu[channel].push_back(mu);
+                segment.masks[channel].push_back(selected ? 1 : 0);
+            }
+        }
+        const auto signal_end = std::chrono::steady_clock::now();
+        const double correlation_during_signal = stage_seconds[3] - correlation_before_signal;
+        stage_seconds[2] +=
+            std::chrono::duration<double>(signal_end - signal_start).count() - correlation_during_signal;
+    }
+
+    for (std::size_t hydrogen = 0; hydrogen < n_hydrogen; ++hydrogen) {
+        if (active_oxygen[hydrogen] >= 0) finalize_segment_timed(&active_segments[hydrogen]);
+    }
+    return 0;
+}

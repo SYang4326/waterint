@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from waterint.config import require_mapping
 from waterint._00_io.common import TrajectoryFrame
 from waterint._01_core.selection import SelectionContext
@@ -78,8 +80,14 @@ def run_combine_bins(config: dict[str, Any], sfg_cfg: dict[str, Any], output_cfg
     runs = string_list(sfg_cfg.get("runs"), name="sfg.runs")
     bins = string_list(sfg_cfg.get("bins"), name="sfg.bins")
     cf_prefix = str(sfg_cfg.get("cf_prefix", "ssVVCF"))
-    include_nh1 = bool(sfg_cfg.get("include_nh1", True))
-    skip_missing_nh1 = bool(sfg_cfg.get("skip_missing_nh1", True))
+    species_tokens = combined_species_tokens(sfg_cfg)
+    complete_partition = set(species_tokens) == set(ALL_SPECIES_TOKENS)
+    # A complete partition is normally requested specifically to make a
+    # publication contribution plot. Silently dropping a species would defeat
+    # that guarantee, whereas legacy nh1-only combinations remain permissive.
+    default_skip_missing = False if complete_partition else bool(sfg_cfg.get("skip_missing_nh1", True))
+    skip_missing_species = bool(sfg_cfg.get("skip_missing_species", default_skip_missing))
+    validate_closure = bool(sfg_cfg.get("validate_species_closure", True))
     nzeros = int(sfg_cfg.get("nzeros", 2000))
 
     cf_paths: dict[str, Path] = {}
@@ -103,22 +111,47 @@ def run_combine_bins(config: dict[str, Any], sfg_cfg: dict[str, Any], output_cfg
         ft_paths[f"{bin_label}:all"] = ft_path
         all_overlay_inputs[bin_label] = ft_path
 
-        if include_nh1:
-            nh1_paths = [nh1_path(input_dir, cf_prefix, bin_label, run) for run in runs]
-            existing = [path for path in nh1_paths if path.exists()]
+        species_corr: dict[str, np.ndarray] = {}
+        species_ft: dict[str, np.ndarray] = {}
+        for token in species_tokens:
+            paths = [species_path(input_dir, cf_prefix, bin_label, run, token) for run in runs]
+            existing = [path for path in paths if path.exists()]
             if len(existing) == len(runs):
-                time_ps_nh1, corr_nh1, counts_nh1 = combine_cf(nh1_paths)
-                combined_nh1 = outdir / f"combined_{bin_label}_cf_nh1.dat"
-                write_cf(combined_nh1, time_ps_nh1, corr_nh1, counts_nh1)
-                freq_nh1, signal_nh1 = compute_ft(time_ps_nh1, corr_nh1, time_unit="ps", nzeros=nzeros)
-                ft_nh1 = outdir / f"combined_{bin_label}_FT_nh1.dat"
-                write_ft(ft_nh1, freq_nh1, signal_nh1)
-                cf_paths[f"{bin_label}:nh1"] = combined_nh1
-                ft_paths[f"{bin_label}:nh1"] = ft_nh1
-                nh1_overlay_inputs[bin_label] = ft_nh1
-            elif not skip_missing_nh1:
-                missing_nh1 = [path for path in nh1_paths if not path.exists()]
-                raise FileNotFoundError(f"Missing SFG nh1 inputs for bin {bin_label}: {missing_nh1}")
+                species_time, species_curve, species_counts = combine_cf(paths)
+                if species_time.shape != time_ps.shape or np.max(np.abs(species_time - time_ps)) > 1e-9:
+                    raise ValueError(f"SFG species time grid mismatch for {bin_label}:{token}")
+                combined_species = outdir / f"combined_{bin_label}_cf_{token}.dat"
+                write_cf(combined_species, species_time, species_curve, species_counts)
+                species_frequency, species_signal = compute_ft(
+                    species_time, species_curve, time_unit="ps", nzeros=nzeros
+                )
+                if species_frequency.shape != freq.shape or np.max(np.abs(species_frequency - freq)) > 1e-9:
+                    raise ValueError(f"SFG species frequency grid mismatch for {bin_label}:{token}")
+                ft_species = outdir / f"combined_{bin_label}_FT_{token}.dat"
+                write_ft(ft_species, species_frequency, species_signal)
+                cf_paths[f"{bin_label}:{token}"] = combined_species
+                ft_paths[f"{bin_label}:{token}"] = ft_species
+                species_corr[token] = species_curve
+                species_ft[token] = species_signal
+                if token == "nh1":
+                    nh1_overlay_inputs[bin_label] = ft_species
+            elif not skip_missing_species:
+                missing = [path for path in paths if not path.exists()]
+                raise FileNotFoundError(f"Missing SFG species inputs for {bin_label}:{token}: {missing}")
+
+        if validate_closure and complete_partition:
+            missing = [token for token in ALL_SPECIES_TOKENS if token not in species_corr]
+            if missing:
+                if not skip_missing_species:
+                    raise FileNotFoundError(f"Missing SFG species inputs required for closure in {bin_label}: {missing}")
+            else:
+                verify_additive_species_closure(
+                    bin_label,
+                    corr,
+                    species_corr,
+                    signal,
+                    species_ft,
+                )
 
     if bool(output_cfg.get("plot", True)):
         overlay_all = outdir / str(output_cfg.get("overlay_all", "FT_bins_all.png"))
@@ -309,6 +342,84 @@ def species_token(species: str) -> str:
     if species == "OH-":
         return "nh1"
     return species.lower().replace("+", "plus").replace("-", "minus").replace("_", "")
+
+
+# Output tokens deliberately retain ``nh1`` for OH- so existing Fig. 2 files
+# remain usable. The other tokens are the filenames written by
+# ``run_layered_trajectory``.
+ALL_SPECIES_TOKENS = ("o2minus", "nh1", "h2o", "h3oplus", "oother")
+_SPECIES_TOKEN_ALIASES = {
+    "O2-": "o2minus",
+    "o2minus": "o2minus",
+    "OH-": "nh1",
+    "nh1": "nh1",
+    "H2O": "h2o",
+    "h2o": "h2o",
+    "H3O+": "h3oplus",
+    "h3oplus": "h3oplus",
+    "O_other": "oother",
+    "oother": "oother",
+}
+
+
+def combined_species_tokens(sfg_cfg: dict[str, Any]) -> list[str]:
+    """Resolve requested species CFs for a multi-run SFG combination.
+
+    ``species_channels: all`` is the publication-safe choice: it requests the
+    complete dynamic oxygen-species partition and enables an exact closure
+    check against the all-OH result. Omitting it preserves the historical
+    ``include_nh1`` behaviour.
+    """
+
+    raw = sfg_cfg.get("species_channels")
+    if raw is None:
+        return ["nh1"] if bool(sfg_cfg.get("include_nh1", True)) else []
+    if raw == "all":
+        return list(ALL_SPECIES_TOKENS)
+    if not isinstance(raw, list):
+        raise ValueError("sfg.species_channels must be 'all' or a list of oxygen species labels.")
+    tokens: list[str] = []
+    for value in raw:
+        label = str(value)
+        if label == "all":
+            tokens.extend(ALL_SPECIES_TOKENS)
+            continue
+        try:
+            tokens.append(_SPECIES_TOKEN_ALIASES[label])
+        except KeyError as exc:
+            raise ValueError(f"Unknown SFG species channel for combination: {label!r}") from exc
+    if len(tokens) != len(set(tokens)):
+        raise ValueError("sfg.species_channels cannot contain duplicate species labels.")
+    return tokens
+
+
+def species_path(input_dir: Path, prefix: str, bin_label: str, run: str, token: str) -> Path:
+    return input_dir / f"{prefix}_{bin_label}_{run}_cf_{token}.dat"
+
+
+def verify_additive_species_closure(
+    bin_label: str,
+    total_corr: np.ndarray,
+    species_corr: dict[str, np.ndarray],
+    total_ft: np.ndarray,
+    species_ft: dict[str, np.ndarray],
+) -> None:
+    """Reject conditional/per-peak-normalized data masquerading as contributions."""
+
+    corr_difference = np.sum([species_corr[token] for token in ALL_SPECIES_TOKENS], axis=0) - total_corr
+    ft_difference = np.sum([species_ft[token] for token in ALL_SPECIES_TOKENS], axis=0) - total_ft
+    corr_error = float(np.max(np.abs(corr_difference)))
+    ft_error = float(np.max(np.abs(ft_difference)))
+    if not (
+        np.allclose(corr_difference, 0.0, rtol=1e-10, atol=1e-12)
+        and np.allclose(ft_difference, 0.0, rtol=1e-10, atol=1e-12)
+    ):
+        raise ValueError(
+            f"SFG species do not add to all-OH for bin {bin_label!r} "
+            f"(max CF error {corr_error:.3e}; max FT error {ft_error:.3e}). "
+            "Use trajectory outputs generated with species_normalization: additive; "
+            "do not combine conditional or independently peak-normalized species spectra."
+        )
 
 
 def write_sfg_metadata(

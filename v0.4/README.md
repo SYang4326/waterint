@@ -92,7 +92,8 @@ sfg:
     - label: 1d5_2d8
       window: {mode: 2, z1: 1.5, z2: 2.8, ramp: 0.0}
     - label: all
-  species_channels: [OH-]
+  species_channels: all
+  species_normalization: additive
 
 output:
   prefix: ssvvcf
@@ -102,6 +103,12 @@ output:
 This writes `ssvvcf_0_1d5_900ps.dat` for all O-H bonds and
 `ssvvcf_0_1d5_900ps_cf_nh1.dat` for OH-. These names are accepted directly by
 the existing `sfg.mode: combine_bins` workflow with `cf_prefix: ssvvcf`.
+For a multi-run species-resolved Fig. 2 calculation, use the same
+`species_channels: all` setting in its `combine_bins` configuration. WaterInt
+then combines all five dynamic species channels (`O2-`, `OH-`, `H2O`, `H3O+`,
+and `O_other`) and checks, point by point, that their combined CF and FT equal
+the all-OH channel. Missing species files or a failed closure check are errors
+in this complete-partition mode.
 For fixed-topology trajectories, layered channels use the native multi-channel
 kernel with one per-frame layer/species mask and accumulator per output. The
 `nh1` mask is dynamic: C++ resolves the unique H-to-O assignment on every frame
@@ -109,6 +116,17 @@ and selects an O-H bond only when that oxygen has exactly one assigned H at
 that frame. `backend: auto` falls back to the equivalent Python segment path
 when native compilation or fixed topology is unavailable. The included
 runnable configuration is `example/mgo_sfg/config_layered_sfg_quick.yaml`.
+
+`species_normalization: additive` is the default. Every species channel in a
+layer uses that layer's all-O-H count at each lag, so the species correlations
+and their Fourier transforms sum to the all-O-H result. Exact closure requires
+requesting every species with `species_channels: all`. The older conditional
+average (each species divided by its own selected count) remains available as
+`species_normalization: conditional`, but those curves are not additive and
+must not be interpreted as peak contributions to the total spectrum.
+The sum over *z* layers is separately guaranteed only when the configured
+windows are non-overlapping and cover the full relevant z range (the supplied
+example includes the `4d0_30` remainder layer for that reason).
 
 For a LAMMPS dump containing all of `vx vy vz`, SFG can use the stored velocities directly instead of estimating them from positions:
 

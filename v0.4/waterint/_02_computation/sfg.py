@@ -37,6 +37,7 @@ class SsvvcfResult:
     zrefs: np.ndarray
     frames: int
     velocity_source: str
+    selected_counts: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -385,19 +386,16 @@ def compute_layered_ssvvcf_from_frames(
             native_sums, native_counts, _stage_seconds = native_result
             time_ps = np.arange(max_lag + 1, dtype=float) * dt_ps
             velocity_source = "trajectory" if trajectory_velocities is not None else "finite_difference"
-            channels: dict[str, SsvvcfResult] = {}
-            for row, channel_name in enumerate(channel_specs):
-                corr = np.zeros(max_lag + 1, dtype=float)
-                nonzero = native_counts[row] > 0
-                corr[nonzero] = native_sums[row, nonzero] / native_counts[row, nonzero]
-                channels[channel_name] = SsvvcfResult(
-                    time_ps=time_ps,
-                    corr=corr,
-                    counts=native_counts[row].copy(),
-                    zrefs=zrefs,
-                    frames=len(frames),
-                    velocity_source=velocity_source,
-                )
+            channels = normalize_layered_channels(
+                channel_specs,
+                native_sums,
+                native_counts,
+                normalization=str(sfg_cfg.get("species_normalization", "additive")),
+                time_ps=time_ps,
+                zrefs=zrefs,
+                frames=len(frames),
+                velocity_source=velocity_source,
+            )
             return LayeredSsvvcfResult(
                 channels=channels,
                 zrefs=zrefs,
@@ -424,25 +422,25 @@ def compute_layered_ssvvcf_from_frames(
         channel_specs=channel_specs,
     )
     time_ps = np.arange(max_lag + 1, dtype=float) * dt_ps
-    channels: dict[str, SsvvcfResult] = {}
-    for channel_name in channel_specs:
-        sums, counts = correlate_layered_sfg_segments_python(
+    sums_by_channel = np.zeros((len(channel_specs), max_lag + 1), dtype=float)
+    counts_by_channel = np.zeros((len(channel_specs), max_lag + 1), dtype=np.int64)
+    for row, channel_name in enumerate(channel_specs):
+        sums_by_channel[row], counts_by_channel[row] = correlate_layered_sfg_segments_python(
             segments,
             channel_name=channel_name,
             max_lag=max_lag,
             symmetrize=bool(sfg_cfg.get("symmetrize", True)),
         )
-        corr = np.zeros_like(sums)
-        nonzero = counts > 0
-        corr[nonzero] = sums[nonzero] / counts[nonzero]
-        channels[channel_name] = SsvvcfResult(
-            time_ps=time_ps,
-            corr=corr,
-            counts=counts,
-            zrefs=zrefs,
-            frames=len(frames),
-            velocity_source=velocity_source,
-        )
+    channels = normalize_layered_channels(
+        channel_specs,
+        sums_by_channel,
+        counts_by_channel,
+        normalization=str(sfg_cfg.get("species_normalization", "additive")),
+        time_ps=time_ps,
+        zrefs=zrefs,
+        frames=len(frames),
+        velocity_source=velocity_source,
+    )
     return LayeredSsvvcfResult(channels=channels, zrefs=zrefs, frames=len(frames), velocity_source=velocity_source)
 
 
@@ -487,6 +485,55 @@ def layered_channel_specs(sfg_cfg: dict[str, Any]) -> dict[str, dict[str, Any]]:
             if channel_name in channels:
                 raise ValueError(f"Duplicate SFG layer/species channel: {channel_name}")
             channels[channel_name] = {"label": label, "window": window, "species": species_name}
+    return channels
+
+
+def normalize_layered_channels(
+    channel_specs: dict[str, dict[str, Any]],
+    sums: np.ndarray,
+    selected_counts: np.ndarray,
+    *,
+    normalization: str,
+    time_ps: np.ndarray,
+    zrefs: np.ndarray,
+    frames: int,
+    velocity_source: str,
+) -> dict[str, SsvvcfResult]:
+    """Normalize layered channels while preserving an additive decomposition.
+
+    With ``additive``, every species in a layer uses that layer's all-O-H
+    denominator. Species raw sums then add to the all-O-H raw sum at every lag,
+    so their correlations and Fourier transforms add exactly as well.
+    ``conditional`` retains the older per-species conditional average.
+    """
+
+    normalization = str(normalization).lower()
+    if normalization not in {"additive", "conditional"}:
+        raise ValueError("sfg.species_normalization must be additive or conditional.")
+    names = tuple(channel_specs)
+    expected_shape = (len(names), time_ps.size)
+    if sums.shape != expected_shape or selected_counts.shape != expected_shape:
+        raise ValueError("Layered SFG sums/counts do not match the configured channels and lag grid.")
+    row_by_name = {name: row for row, name in enumerate(names)}
+    channels: dict[str, SsvvcfResult] = {}
+    for row, channel_name in enumerate(names):
+        spec = channel_specs[channel_name]
+        denominator_row = row
+        if normalization == "additive" and spec["species"] != "all":
+            denominator_row = row_by_name[f"{spec['label']}:all"]
+        denominator = selected_counts[denominator_row]
+        corr = np.zeros(time_ps.size, dtype=float)
+        nonzero = denominator > 0
+        corr[nonzero] = sums[row, nonzero] / denominator[nonzero]
+        channels[channel_name] = SsvvcfResult(
+            time_ps=time_ps,
+            corr=corr,
+            counts=denominator.copy(),
+            zrefs=zrefs,
+            frames=frames,
+            velocity_source=velocity_source,
+            selected_counts=selected_counts[row].copy(),
+        )
     return channels
 
 

@@ -30,8 +30,13 @@ installations that fall back to Python:
 
 `mgo_sfg/config_layered_sfg_quick.yaml` is a short layer- and hydroxide-
 resolved SFG configuration. It writes the all-O-H and `nh1` (OH-) channel for
-each configured z bin. Fixed-topology input uses the native multi-channel
-kernel; Python provides the equivalent fallback path.
+each configured z bin, plus the remaining dynamic oxygen-species channels.
+All species use the layer's total count as a shared denominator, so their
+spectra add to the all-O-H spectrum. Fixed-topology input uses the native
+multi-channel kernel; Python provides the equivalent fallback path.
+Its `0-1.5`, `1.5-2.8`, `2.8-4.0`, and `4.0-30 A` bins are a non-overlapping
+partition, so their layer contributions can also be added to recover the
+all-OH spectrum (subject to coordinates remaining inside that final range).
 
 `mgo_sfg/config_100ps_npz_full.yaml` is included for the full 100 ps SFG run,
 but it is not part of the default example command. On the benchmark machine,

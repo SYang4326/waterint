@@ -92,9 +92,12 @@ class V04LayeredSfgTests(unittest.TestCase):
         self.assertEqual(result.channels["low:all"].counts[0], 10)
         self.assertEqual(result.channels["high:all"].counts[0], 20)
         self.assertEqual(result.channels["low:nh1"].counts[0], 10)
-        self.assertEqual(result.channels["high:nh1"].counts[0], 0)
+        self.assertEqual(result.channels["high:nh1"].counts[0], 20)
         self.assertEqual(result.channels["all:all"].counts[0], 30)
-        self.assertEqual(result.channels["all:nh1"].counts[0], 10)
+        self.assertEqual(result.channels["all:nh1"].counts[0], 30)
+        self.assertEqual(result.channels["low:nh1"].selected_counts[0], 10)
+        self.assertEqual(result.channels["high:nh1"].selected_counts[0], 0)
+        self.assertEqual(result.channels["all:nh1"].selected_counts[0], 10)
         for channel_name in result.channels:
             np.testing.assert_array_equal(
                 results["cpp"].channels[channel_name].counts,
@@ -144,8 +147,10 @@ class V04LayeredSfgTests(unittest.TestCase):
                 context=selection_context({}),
             )
         self.assertEqual(int(results["python"].channels["all:all"].counts[0]), 24)
-        self.assertEqual(int(results["python"].channels["all:nh1"].counts[0]), 12)
-        self.assertEqual(int(results["python"].channels["all:H2O"].counts[0]), 12)
+        self.assertEqual(int(results["python"].channels["all:nh1"].counts[0]), 24)
+        self.assertEqual(int(results["python"].channels["all:H2O"].counts[0]), 24)
+        self.assertEqual(int(results["python"].channels["all:nh1"].selected_counts[0]), 12)
+        self.assertEqual(int(results["python"].channels["all:H2O"].selected_counts[0]), 12)
         for channel_name in results["python"].channels:
             np.testing.assert_array_equal(
                 results["cpp"].channels[channel_name].counts,
@@ -157,6 +162,37 @@ class V04LayeredSfgTests(unittest.TestCase):
                 rtol=1e-12,
                 atol=1e-12,
             )
+        species_names = ["all:O2-", "all:nh1", "all:H2O", "all:H3O+", "all:O_other"]
+        species_corr = sum(results["python"].channels[name].corr for name in species_names)
+        np.testing.assert_allclose(
+            species_corr,
+            results["python"].channels["all:all"].corr,
+            rtol=1e-12,
+            atol=1e-12,
+        )
+        total_frequency, total_signal = sfg.compute_ft(
+            results["python"].channels["all:all"].time_ps,
+            results["python"].channels["all:all"].corr,
+            nzeros=20,
+        )
+        species_signals = []
+        for name in species_names:
+            frequency, signal = sfg.compute_ft(
+                results["python"].channels[name].time_ps,
+                results["python"].channels[name].corr,
+                nzeros=20,
+            )
+            np.testing.assert_array_equal(frequency, total_frequency)
+            species_signals.append(signal)
+        np.testing.assert_allclose(sum(species_signals), total_signal, rtol=1e-12, atol=1e-12)
+
+        conditional = sfg.compute_layered_ssvvcf_from_frames(
+            self._dynamic_frames(),
+            cell=(20.0, 20.0, 20.0),
+            sfg_cfg={**cfg, "backend": "python", "species_normalization": "conditional"},
+            context=selection_context({}),
+        )
+        self.assertEqual(int(conditional.channels["all:nh1"].counts[0]), 12)
 
     @staticmethod
     def _dynamic_frames() -> list:
@@ -239,6 +275,45 @@ class V04LayeredSfgTests(unittest.TestCase):
             combined = workflow.run_sfg(combine_config)
             self.assertTrue(combined.cf_paths["low:all"].exists())
             self.assertTrue(combined.cf_paths["low:nh1"].exists())
+
+    def test_combine_bins_checks_complete_species_partition(self) -> None:
+        workflow = importlib.import_module("waterint._04_workflows.workflows.sfg")
+        sfg = importlib.import_module("waterint._02_computation.sfg")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            time = np.asarray([0.0, 0.1, 0.2])
+            total = np.asarray([4.0, 2.0, 1.0])
+            parts = {
+                "o2minus": np.asarray([0.0, 0.0, 0.0]),
+                "nh1": np.asarray([1.0, 0.5, 0.25]),
+                "h2o": np.asarray([3.0, 1.5, 0.75]),
+                "h3oplus": np.asarray([0.0, 0.0, 0.0]),
+                "oother": np.asarray([0.0, 0.0, 0.0]),
+            }
+            sfg.write_cf(root / "ssvvcf_all_test.dat", time, total, np.asarray([8, 6, 4]))
+            for token, curve in parts.items():
+                # Additive channels must retain the all-OH denominator.
+                sfg.write_cf(root / f"ssvvcf_all_test_cf_{token}.dat", time, curve, np.asarray([8, 6, 4]))
+            config = {
+                "_config_dir": str(root),
+                "sfg": {
+                    "mode": "combine_bins",
+                    "input_directory": ".",
+                    "runs": ["test"],
+                    "bins": ["all"],
+                    "cf_prefix": "ssvvcf",
+                    "species_channels": "all",
+                    "nzeros": 20,
+                },
+                "output": {"directory": "combined", "plot": False},
+            }
+            result = workflow.run_sfg(config)
+            self.assertIn("all:h2o", result.cf_paths)
+            self.assertIn("all:nh1", result.ft_paths)
+
+            sfg.write_cf(root / "ssvvcf_all_test_cf_h2o.dat", time, parts["h2o"] * 1.1, np.asarray([8, 6, 4]))
+            with self.assertRaisesRegex(ValueError, "do not combine conditional"):
+                workflow.run_sfg({**config, "output": {"directory": "invalid", "plot": False}})
 
 
 if __name__ == "__main__":

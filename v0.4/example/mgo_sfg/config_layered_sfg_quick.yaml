@@ -31,8 +31,11 @@ sfg:
       window: {mode: 2, z1: 1.5, z2: 2.8, ramp: 0.0}
     - label: 2d8_4d0
       window: {mode: 2, z1: 2.8, z2: 4.0, ramp: 0.0}
+    - label: 4d0_30
+      window: {mode: 2, z1: 4.0, z2: 30.0, ramp: 0.0}
     - label: all
-  species_channels: [OH-]
+  species_channels: all
+  species_normalization: additive
   mu_mode: full
   symmetrize: true
   nzeros: 2000

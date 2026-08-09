@@ -100,6 +100,17 @@ The existing single-window ABI remains available for compatibility. Python
 implements the same mask semantics and is the fallback for variable topology
 or unavailable native compilation.
 
+Layered species channels retain their raw selected-origin counts, but additive
+output uses the corresponding all-O-H layer counts as a shared denominator.
+This makes species correlation functions a linear partition of the total;
+count-weighted run combination and Fourier transformation therefore preserve
+the partition exactly. Per-species conditional normalization is supported only
+as an explicit non-additive compatibility mode.
+When `combine_bins` uses `species_channels: all`, it combines the complete
+partition and validates CF and FT closure before writing the decomposition. It
+fails if a species file is absent or if independently normalized data do not
+add back to the all-OH channel.
+
 The native library is generated on demand under `waterint/_native/`. Normal users can still run without compiling C++ code because `auto` falls back to Python.
 
 ## Performance Finding

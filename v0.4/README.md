@@ -86,11 +86,24 @@ it is a species label, not a layer number.
 sfg:
   mode: trajectory
   backend: auto
+  reference:
+    type: top_layer_mean
+    species: [Mg]
+    surface: max
+    layer_width: 0.7
   layer_bins:
-    - label: 0_1d5
-      window: {mode: 2, z1: 0.0, z2: 1.5, ramp: 0.0}
+    - label: below_m0d5
+      window: {mode: 1, z1: -0.5, z2: -0.5, ramp: 0.0, flip: false}
+    - label: m0d5_1d5
+      window: {mode: 2, z1: -0.5, z2: 1.5, ramp: 0.0}
     - label: 1d5_2d8
       window: {mode: 2, z1: 1.5, z2: 2.8, ramp: 0.0}
+    - label: 2d8_4d0
+      window: {mode: 2, z1: 2.8, z2: 4.0, ramp: 0.0}
+    - label: 4d0_30
+      window: {mode: 2, z1: 4.0, z2: 30.0, ramp: 0.0}
+    - label: above_30
+      window: {mode: 1, z1: 30.0, z2: 30.0, ramp: 0.0, flip: true}
     - label: all
   species_channels: all
   species_normalization: additive
@@ -126,7 +139,12 @@ average (each species divided by its own selected count) remains available as
 must not be interpreted as peak contributions to the total spectrum.
 The sum over *z* layers is separately guaranteed only when the configured
 windows are non-overlapping and cover the full relevant z range (the supplied
-example includes the `4d0_30` remainder layer for that reason).
+example includes `below_m0d5` and `above_30` guard channels, plus the
+`m0d5_1d5`–`4d0_30` partition, for that reason). In particular, `z_rel` is
+the per-frame oxygen coordinate relative to the per-frame surface reference.
+For thermal interfaces, begin the displayed contact layer modestly below zero
+(for example `-0.5–1.5 Å`) and inspect the lower guard channel before deciding
+that any signal below the nominal surface is negligible.
 
 For a LAMMPS dump containing all of `vx vy vz`, SFG can use the stored velocities directly instead of estimating them from positions:
 

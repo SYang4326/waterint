@@ -241,8 +241,16 @@ def compute_green_kubo_conductivity(
     )
     current_si -= np.mean(current_si, axis=1, keepdims=True)
     prefactor = 1.0 / (volume_a3 * 1.0e-30 * BOLTZMANN_J_PER_K * temperature_k)
-    values = []
-    errors = []
+    spectrum = compute_spectrum(
+        current_si,
+        prefactors=prefactor,
+        timestep=tracking.timestep_ps * PICOSECOND_S,
+        include_zero_freq=False,
+    )
+    estimate = estimate_acint(spectrum, ExpPolyModel([0, 1, 2]), verbose=False)
+
+    component_values = []
+    component_errors = []
     for component in current_si:
         spectrum = compute_spectrum(
             component[None, :],
@@ -250,16 +258,18 @@ def compute_green_kubo_conductivity(
             timestep=tracking.timestep_ps * PICOSECOND_S,
             include_zero_freq=False,
         )
-        estimate = estimate_acint(spectrum, ExpPolyModel([0, 1, 2]), verbose=False)
-        values.append(float(np.asarray(estimate.acint)))
-        errors.append(float(np.asarray(estimate.acint_std)))
-    component_values = np.asarray(values)
-    component_errors = np.asarray(errors)
+        component_estimate = estimate_acint(
+            spectrum,
+            ExpPolyModel([0, 1, 2]),
+            verbose=False,
+        )
+        component_values.append(float(np.asarray(component_estimate.acint)))
+        component_errors.append(float(np.asarray(component_estimate.acint_std)))
     return GreenKuboResult(
-        conductivity_s_per_m=float(np.mean(component_values)),
-        conductivity_std_s_per_m=float(np.sqrt(np.sum(component_errors**2)) / len(component_errors)),
-        component_conductivity_s_per_m=component_values,
-        component_std_s_per_m=component_errors,
+        conductivity_s_per_m=float(np.asarray(estimate.acint)),
+        conductivity_std_s_per_m=float(np.asarray(estimate.acint_std)),
+        component_conductivity_s_per_m=np.asarray(component_values),
+        component_std_s_per_m=np.asarray(component_errors),
     )
 
 

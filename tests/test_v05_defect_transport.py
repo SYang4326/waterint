@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
@@ -152,6 +153,53 @@ class V05DefectTransportTests(unittest.TestCase):
             self.assertIsNotNone(conductivity_result.nernst_einstein)
             self.assertIsNone(conductivity_result.green_kubo)
             self.assertIn("defect_nernst_einstein", conductivity_result.csv_path.read_text())
+
+    def test_green_kubo_fits_cartesian_components_jointly(self) -> None:
+        module = importlib.import_module("waterint._02_computation.defect_transport")
+        positions = [
+            np.asarray([[float(frame), 2.0 * frame, 0.0]])
+            for frame in range(4)
+        ]
+        tracking = module.track_defects(
+            positions,
+            [np.asarray([0])] * 4,
+            cell_vectors=np.repeat(np.diag([20.0, 20.0, 20.0])[None, :, :], 4, axis=0),
+            pbc=(False, False, False),
+            timestep_ps=1.0,
+            gate_a=4.0,
+        )
+        sequence_counts = []
+        fake_stacie = types.ModuleType("stacie")
+        fake_stacie.ExpPolyModel = lambda orders: tuple(orders)
+
+        def compute_spectrum(sequences, **kwargs):
+            sequence_counts.append(sequences.shape[0])
+            return sequences.shape[0]
+
+        def estimate_acint(spectrum, model, verbose=False):
+            return types.SimpleNamespace(acint=float(spectrum), acint_std=0.1 * spectrum)
+
+        fake_stacie.compute_spectrum = compute_spectrum
+        fake_stacie.estimate_acint = estimate_acint
+        old_stacie = sys.modules.get("stacie")
+        sys.modules["stacie"] = fake_stacie
+        try:
+            result = module.compute_green_kubo_conductivity(
+                tracking,
+                volume_a3=1000.0,
+                temperature_k=300.0,
+                dimensionality="2d",
+                plane_normal_axis=2,
+            )
+        finally:
+            if old_stacie is None:
+                sys.modules.pop("stacie", None)
+            else:
+                sys.modules["stacie"] = old_stacie
+
+        self.assertEqual(sequence_counts, [2, 1, 1])
+        self.assertEqual(result.conductivity_s_per_m, 2.0)
+        np.testing.assert_allclose(result.component_conductivity_s_per_m, [1.0, 1.0])
 
     def test_dynamic_defect_modules_are_registered(self) -> None:
         registry = importlib.import_module("waterint._04_workflows.registry.registry")

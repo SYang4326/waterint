@@ -19,6 +19,12 @@ def run_conductivity(config: dict[str, Any]) -> ConductivityResult:
     input_cfg, system_cfg, output_cfg = required_workflow_sections(config)
     conductivity_cfg = require_mapping(config, "conductivity")
     msd_cfg = require_mapping(config, "msd")
+    selection_cfg = require_mapping(config, "selection")
+    if "oxygen_species" in selection_cfg:
+        raise ValueError(
+            "Fixed-carrier conductivity cannot use selection.oxygen_species because proton transfer "
+            "changes the carrier oxygen identity. Use defect-conductivity instead."
+        )
     temperature_k = positive_float(conductivity_cfg.get("temperature_K"), "conductivity.temperature_K")
     charge_e = float(conductivity_cfg.get("charge_e", 0.0))
     fit_range = parse_fit_range(conductivity_cfg.get("fit_range_ps"))

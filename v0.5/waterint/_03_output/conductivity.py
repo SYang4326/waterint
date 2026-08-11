@@ -16,7 +16,7 @@ def write_conductivity_csv(path: Path, result: ConductivityResult, *, temperatur
         )
         sheet = "" if result.sheet_conductance_s is None else f"{result.sheet_conductance_s:.10g}"
         handle.write(
-            f"{temperature_k:.10g},{charge_e:.10g},{result.dimensionality},{result.carrier_count},"
+            f"{temperature_k:.10g},{charge_e:.10g},{result.dimensionality},{result.carrier_count:.10g},"
             f"{result.volume_a3:.10g},{fit_range_ps[0]:.10g},{fit_range_ps[1]:.10g},"
             f"{result.slope_a2_per_ps:.10g},{result.diffusion_a2_per_ps:.10g},"
             f"{result.diffusion_m2_per_s:.10g},{result.conductivity_s_per_m:.10g},"

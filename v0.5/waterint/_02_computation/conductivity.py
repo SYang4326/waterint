@@ -26,7 +26,7 @@ class ConductivityResult:
     diffusion_m2_per_s: float
     conductivity_s_per_m: float
     sheet_conductance_s: float | None
-    carrier_count: int
+    carrier_count: float
     volume_a3: float
     dimensionality: int
     csv_path: Path | None = None
@@ -39,7 +39,7 @@ def compute_nernst_einstein_conductivity(
     time_ps: np.ndarray,
     msd_a2: np.ndarray,
     *,
-    carrier_count: int,
+    carrier_count: float,
     volume_a3: float,
     temperature_k: float,
     charge_e: float,
@@ -99,7 +99,7 @@ def compute_nernst_einstein_conductivity(
         diffusion_m2_per_s=diffusion_m2_per_s,
         conductivity_s_per_m=float(conductivity),
         sheet_conductance_s=None if sheet is None else float(sheet),
-        carrier_count=int(carrier_count),
+        carrier_count=float(carrier_count),
         volume_a3=float(volume_a3),
         dimensionality=dimensions,
     )

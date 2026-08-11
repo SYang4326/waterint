@@ -74,6 +74,19 @@ class V05ConductivityTests(unittest.TestCase):
         self.assertEqual(registry.get_analysis_module("conductivity").name, "conductivity")
         self.assertEqual(registry.get_analysis_module("conductivity-ne").name, "conductivity")
 
+    def test_fixed_conductivity_rejects_dynamic_oxygen_species(self) -> None:
+        workflow = importlib.import_module("waterint._04_workflows.workflows.conductivity")
+        config = {
+            "input": {},
+            "system": {},
+            "selection": {"oxygen_species": ["OH-"]},
+            "msd": {},
+            "conductivity": {},
+            "output": {},
+        }
+        with self.assertRaisesRegex(ValueError, "defect-conductivity"):
+            workflow.run_conductivity(config)
+
 
 if __name__ == "__main__":
     unittest.main()

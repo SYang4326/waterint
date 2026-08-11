@@ -128,7 +128,9 @@ On the full 100 ps trajectory-mode SFG workflow, the native kernel reduces stage
 
 `msd` and `rdf` follow the same native-backend convention. The C++ MSD kernel performs PBC-aware trajectory unwrapping followed by multiple-time-origin displacement accumulation. The C++ RDF kernel accumulates pair distances with full triclinic minimum-image handling. Python owns config, selection, coordinate references, normalization, and output, and remains the fallback path.
 
-`conductivity` deliberately has no extra native kernel: it reuses `msd` for PBC-aware multiple-time-origin displacement accumulation, then performs a transparent NumPy linear fit and SI Nernst--Einstein conversion. The workflow computes an average full-cell volume or an instantaneous in-plane-area times explicit slab-thickness volume. This contract is valid only for fixed, independently counted carrier identities; Green--Kubo charge-current and proton-defect tracking are separate future workflows.
+`conductivity` deliberately has no extra native kernel: it reuses `msd` for PBC-aware multiple-time-origin displacement accumulation, then performs a transparent NumPy linear fit and SI Nernst--Einstein conversion. The workflow computes an average full-cell volume or an instantaneous in-plane-area times explicit slab-thickness volume. This contract is valid only for fixed, independently counted carrier identities.
+
+`defect-msd` and `defect-conductivity` use a separate dynamic-defect contract. Oxygen species are classified on every frame, an explicit dummy-augmented Hungarian assignment matches defects within a configurable PBC-aware gate, and matched positions are unwrapped into lifetime-bounded tracks. Defect MSD accumulates only origin/lag pairs within one track. The same matches produce a collective charge-current series for optional STACIE Green--Kubo integration; the dynamic-defect Nernst--Einstein estimate is retained only as a directly comparable independent-carrier approximation.
 
 ## Workflow Registry
 

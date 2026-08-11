@@ -9,6 +9,8 @@ from waterint._04_workflows.workflows.hbond import run_hbond
 from waterint._04_workflows.workflows.oh_orientation import run_oh_orientation
 from waterint._04_workflows.workflows.msd import run_msd
 from waterint._04_workflows.workflows.conductivity import run_conductivity
+from waterint._04_workflows.workflows.defect_conductivity import run_defect_conductivity
+from waterint._04_workflows.workflows.defect_msd import run_defect_msd
 from waterint._04_workflows.workflows.rdf import run_rdf
 from waterint._04_workflows.workflows.sfg import run_sfg
 
@@ -61,6 +63,26 @@ def print_conductivity_outputs(result: Any) -> None:
     print(f"Wrote: {result.metadata_path}")
 
 
+def print_defect_msd_outputs(result: Any) -> None:
+    print(f"Wrote: {result.csv_path}")
+    print(f"Wrote: {result.tracks_csv_path}")
+    print(f"Wrote: {result.events_csv_path}")
+    if result.png_path:
+        print(f"Wrote: {result.png_path}")
+    print(f"Wrote: {result.metadata_path}")
+
+
+def print_defect_conductivity_outputs(result: Any) -> None:
+    print(f"Wrote: {result.csv_path}")
+    print(f"Wrote: {result.msd_csv_path}")
+    print(f"Wrote: {result.tracks_csv_path}")
+    print(f"Wrote: {result.events_csv_path}")
+    print(f"Wrote: {result.current_csv_path}")
+    if result.png_path:
+        print(f"Wrote: {result.png_path}")
+    print(f"Wrote: {result.metadata_path}")
+
+
 def print_rdf_outputs(result: Any) -> None:
     for pair in result.pairs.values():
         print(f"Wrote: {pair.csv_path}")
@@ -102,18 +124,34 @@ ANALYSIS_MODULES: tuple[AnalysisModule, ...] = (
     ),
     AnalysisModule(
         name="msd",
-        help="Run a mean-squared-displacement workflow.",
+        help="Run a fixed-atom mean-squared-displacement workflow.",
         run=run_msd,
         print_outputs=print_msd_outputs,
-        description="Compute 2D or 3D multiple-time-origin MSD for a fixed atom selection.",
+        aliases=("atom-msd",),
+        description="Compute 2D or 3D multiple-time-origin MSD for a fixed stable-atom selection.",
+    ),
+    AnalysisModule(
+        name="defect-msd",
+        help="Run a dynamically tracked defect MSD workflow.",
+        run=run_defect_msd,
+        print_outputs=print_defect_msd_outputs,
+        description="Classify defects per frame, track them with Hungarian assignment, and compute lifetime-aware MSD.",
     ),
     AnalysisModule(
         name="conductivity",
-        help="Run a Nernst-Einstein conductivity workflow.",
+        help="Run a fixed-carrier Nernst-Einstein conductivity workflow.",
         run=run_conductivity,
         print_outputs=print_conductivity_outputs,
         aliases=("conductivity-ne",),
-        description="Fit a selected carrier MSD and calculate Nernst-Einstein conductivity.",
+        description="Fit a fixed stable-carrier MSD; not valid for identity-changing proton defects.",
+    ),
+    AnalysisModule(
+        name="defect-conductivity",
+        help="Run dynamically tracked defect conductivity workflows.",
+        run=run_defect_conductivity,
+        print_outputs=print_defect_conductivity_outputs,
+        aliases=("conductivity-defect",),
+        description="Compare dynamic-defect MSD Nernst-Einstein with collective STACIE Green-Kubo conductivity.",
     ),
     AnalysisModule(
         name="rdf",

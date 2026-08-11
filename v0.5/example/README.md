@@ -25,6 +25,8 @@ installations that fall back to Python:
 - `mgo_conductivity/`: Nernst--Einstein configuration template based on the
   layer-selected 2D MSD. Replace its oxygen selection with fixed ionic carrier
   identities before interpreting the result physically.
+- `mgo_defect_transport/`: dynamic OH- tracking, lifetime-aware defect MSD,
+  defect Nernst--Einstein comparison, and recommended STACIE Green--Kubo current.
 - `mgo_rdf/`: O-O/O-H and species-selective RDF configurations.
 - `mgo_rdf/config_relabelled_oxygen_groups.yaml`: per-frame relabelled
   Mg, lattice O, layer-1 OH-/H2O, layer-2 OH-, and bulk H2O source groups.

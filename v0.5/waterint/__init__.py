@@ -7,7 +7,10 @@ from waterint._04_workflows.workflows.density import run_density
 from waterint._04_workflows.workflows.hbond import run_hbond
 from waterint._04_workflows.workflows.sfg import run_sfg
 from waterint._04_workflows.workflows.conductivity import run_conductivity
+from waterint._04_workflows.workflows.defect_conductivity import run_defect_conductivity
+from waterint._04_workflows.workflows.defect_msd import run_defect_msd
 from waterint._02_computation.conductivity import ConductivityResult
+from waterint._02_computation.defect_transport import DefectMsdResult, DefectTrackingResult
 
 __all__ = [
     "OhOrientationResult",
@@ -18,6 +21,8 @@ __all__ = [
     "SsvvcfResult",
     "LayeredSsvvcfResult",
     "ConductivityResult",
+    "DefectMsdResult",
+    "DefectTrackingResult",
     "compute_density_profile",
     "run_angle_z",
     "run_oh_orientation",
@@ -25,4 +30,6 @@ __all__ = [
     "run_hbond",
     "run_sfg",
     "run_conductivity",
+    "run_defect_conductivity",
+    "run_defect_msd",
 ]

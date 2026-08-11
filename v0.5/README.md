@@ -1,6 +1,6 @@
 # WaterInt v0.5
 
-WaterInt v0.5 extends the v0.4 registry architecture with a config-driven Nernst--Einstein conductivity workflow. It fits a fixed carrier selection's MSD in a user-specified diffusive time window, then reports diffusion coefficient, bulk conductivity, and optional sheet conductance.
+WaterInt v0.5 extends the v0.4 registry architecture with fixed-atom and dynamic-defect transport workflows. Stable ions can use fixed-atom MSD and Nernst--Einstein conductivity. Identity-changing proton defects must use framewise species classification, Hungarian defect tracking, lifetime-aware defect MSD, and preferably collective Green--Kubo conductivity through STACIE.
 
 Documentation website:
 
@@ -19,6 +19,8 @@ https://water-interface-analysis.syang4326m.workers.dev/
 - Added `msd`: 2D/3D, PBC-unwrapped multiple-time-origin MSD with an optional initial-frame layer selection.
 - Added `rdf`: O-O/O-H defaults plus element, LAMMPS type, oxygen-species, and coordinate-layer selective pair RDFs.
 - Added `conductivity`: Nernst--Einstein conductivity from a fixed carrier MSD, with 2D/3D diffusion, explicit fit interval, cell/slab volume, and optional sheet conductance.
+- Added `defect-msd`: framewise oxygen-species classification, gated Hungarian tracking, PBC-unwrapped defect segments, and lifetime-aware multiple-time-origin MSD.
+- Added `defect-conductivity`: defect-MSD Nernst--Einstein for comparison and collective STACIE Green--Kubo as the recommended proton-defect estimator.
 - Kept Python as the public API and fallback path.
 
 The chemistry layer provides corresponding shared Python and C++ cell-list implementations. Density uses count-only queries, while O-H orientation and H-bond analysis reuse full O-H neighbor identities. H-bond analysis uses the same spatial-search abstraction for O-O acceptor candidates.
@@ -237,6 +239,8 @@ PYTHONPATH=v0.5 python3 -m waterint.cli rdf --config v0.5/example/mgo_rdf/config
 
 `msd` follows a fixed set of atom identities. `selection` chooses those atoms in the first frame. When `msd.layer` is present, it further retains only atoms whose first-frame coordinate lies in that interval. The coordinate uses the existing absolute/reference/slab-relative definition, so an interfacial layer can be expressed relative to a moving slab surface. Multiple time origins are then averaged for 2D or 3D displacement.
 
+This command is also available as `atom-msd`. Do not use `msd` with an instantaneous OH- selection to represent proton-defect motion: the selected oxygen identities remain fixed after the first frame.
+
 ```yaml
 selection:
   elements: [O]
@@ -292,7 +296,52 @@ conductivity:
     thickness_A: 4.0
 ```
 
-Use `volume.mode: cell` (the default) for a bulk estimate. For an interfacial 2D estimate, use `volume.mode: slab`; WaterInt uses the instantaneous in-plane cell area times `thickness_A` and writes `G` as well as the nominal 3D conductivity. The selected identities must represent fixed, independently counted carriers. Ordinary atom MSD is therefore appropriate for stable ions, but not by itself for proton-transfer conduction where the charge defect changes oxygen identity. That case needs explicit defect tracking or a Green--Kubo charge-current workflow such as the project STACIE reference code.
+Use `volume.mode: cell` (the default) for a bulk estimate. For an interfacial 2D estimate, use `volume.mode: slab`; WaterInt uses the instantaneous in-plane cell area times `thickness_A` and writes `G` as well as the nominal 3D conductivity. The selected identities must represent fixed, independently counted carriers. Ordinary atom MSD is therefore appropriate for stable ions, but not by itself for proton-transfer conduction where the charge defect changes oxygen identity. To prevent accidental misuse, fixed `conductivity` rejects `selection.oxygen_species`; use `defect-conductivity` for OH- or H3O+ transport.
+
+## Dynamic defect transport
+
+`defect-msd` and `defect-conductivity` reclassify the requested oxygen species in every frame. A gated Hungarian assignment joins nearby defects between consecutive frames using the configured periodic dimensions. Matched positions are unwrapped into continuous tracks; unmatched old tracks die and unmatched current defects are born. A periodic box crossing remains part of the same track.
+
+Defect MSD uses only origin/lag pairs contained within one continuous track and writes the effective segment-origin sample count for every lag. This avoids first-frame carrier identity bias, but long-lag values can still have survival bias when only long-lived tracks remain.
+
+```yaml
+selection:
+  oxygen_species: [OH-]
+  oxygen_symbol: O
+  hydrogen_symbol: H
+  hydrogen_assignment: nearest
+  oh_cutoff: 1.25
+
+defect_tracking:
+  timestep_ps: 0.1
+  gate_A: 3.0
+  pbc: [true, true, false]
+  layer:
+    coordinate:
+      mode: relative_to_slab
+      axis: z
+      reference: {type: top_layer_mean, species: [Mg], surface: max, layer_width: 0.7}
+    range: [-0.5, 4.0]
+
+defect_msd:
+  dimensionality: 2d
+  plane_normal_axis: z
+  max_lag_frames: 2000
+  origin_stride: 10
+
+defect_conductivity:
+  estimator: both
+  temperature_K: 300.0
+  charge_e: -1.0
+  fit_range_ps: [20.0, 100.0]
+  volume: {mode: slab, normal_axis: z, thickness_A: 4.5}
+```
+
+`estimator: nernst_einstein` applies the independent-carrier approximation to the dynamic defect MSD and mean defect population. `estimator: green_kubo` uses the collective matched-defect charge current with STACIE. `estimator: both` writes both estimates from the same tracks and is the recommended validation mode. Install the optional dependency with `python -m pip install '.[transport]'`.
+
+Birth/death events at an open layer boundary do not have a unique displacement and therefore contribute no artificial jump current. For a spatially open subsystem, inspect the events CSV and test the layer definition before assigning the result to a bulk material property.
+
+Green--Kubo current sampling must resolve the defect-transfer dynamics. Do not reuse an aggressively downsampled MSD trajectory without a convergence test: run the current at the native saved-frame interval when possible, then compare against progressively larger `input.stride` values. Always report sensitivity to `selection.oh_cutoff`, `defect_tracking.gate_A`, and the layer boundaries. A moving slab-relative layer is physically clearer for a fluctuating interface, but boundary flicker can increase birth/death counts; compare it with a nearby fixed absolute layer and consider a hysteretic boundary mode when that sensitivity is large.
 
 ## RDF
 

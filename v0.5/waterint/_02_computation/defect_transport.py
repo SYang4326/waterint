@@ -161,6 +161,7 @@ def compute_defect_msd(
     *,
     max_lag_frames: int | None = None,
     origin_stride: int = 1,
+    frame_stride: int = 1,
     dimensionality: str = "3d",
     plane_normal_axis: int = 2,
 ) -> DefectMsdResult:
@@ -168,12 +169,17 @@ def compute_defect_msd(
 
     if origin_stride <= 0:
         raise ValueError("defect_msd.origin_stride must be positive.")
+    if frame_stride <= 0:
+        raise ValueError("defect_msd.frame_stride must be positive.")
     mode = {2: "2d", 3: "3d"}.get(dimensionality, str(dimensionality).lower())
     if mode not in {"2d", "3d"}:
         raise ValueError("defect_msd.dimensionality must be 2d or 3d.")
     if plane_normal_axis not in {0, 1, 2}:
         raise ValueError("defect_msd.plane_normal_axis must be x, y, or z.")
-    longest = max((len(segment.frame_indices) for segment in tracking.segments), default=0)
+    longest = max(
+        (len(segment.frame_indices[::frame_stride]) for segment in tracking.segments),
+        default=0,
+    )
     if longest < 2:
         raise ValueError("Defect MSD requires at least one segment with two frames.")
     max_lag = longest - 1 if max_lag_frames is None else min(int(max_lag_frames), longest - 1)
@@ -183,7 +189,7 @@ def compute_defect_msd(
     sums = np.zeros(max_lag + 1, dtype=float)
     samples = np.zeros(max_lag + 1, dtype=np.int64)
     for segment in tracking.segments:
-        positions = np.asarray(segment.positions_a, dtype=float)
+        positions = np.asarray(segment.positions_a[::frame_stride], dtype=float)
         for lag in range(min(max_lag, len(positions) - 1) + 1):
             origins = np.arange(0, len(positions) - lag, origin_stride, dtype=int)
             displacement = positions[origins + lag] - positions[origins]
@@ -195,7 +201,7 @@ def compute_defect_msd(
     lags = np.arange(max_lag + 1, dtype=int)
     return DefectMsdResult(
         lag_frames=lags,
-        time_ps=lags.astype(float) * tracking.timestep_ps,
+        time_ps=lags.astype(float) * tracking.timestep_ps * frame_stride,
         msd_a2=msd,
         samples=samples,
         segments=len(tracking.segments),

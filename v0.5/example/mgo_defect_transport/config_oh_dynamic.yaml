@@ -26,6 +26,7 @@ defect_tracking:
     range: [-0.5, 4.0]
 
 defect_msd:
+  frame_stride: 10
   dimensionality: 2d
   plane_normal_axis: z
   max_lag_frames: 2000

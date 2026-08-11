@@ -302,7 +302,7 @@ Use `volume.mode: cell` (the default) for a bulk estimate. For an interfacial 2D
 
 `defect-msd` and `defect-conductivity` reclassify the requested oxygen species in every frame. A gated Hungarian assignment joins nearby defects between consecutive frames using the configured periodic dimensions. Matched positions are unwrapped into continuous tracks; unmatched old tracks die and unmatched current defects are born. A periodic box crossing remains part of the same track.
 
-Defect MSD uses only origin/lag pairs contained within one continuous track and writes the effective segment-origin sample count for every lag. This avoids first-frame carrier identity bias, but long-lag values can still have survival bias when only long-lived tracks remain.
+Defect MSD uses only origin/lag pairs contained within one continuous track and writes the effective segment-origin sample count for every lag. This avoids first-frame carrier identity bias, but long-lag values can still have survival bias when only long-lived tracks remain. `defect_msd.frame_stride` optionally subsamples each completed track for the MSD only; tracking and Green--Kubo current always retain the native interval given by `defect_tracking.timestep_ps`.
 
 ```yaml
 selection:
@@ -313,7 +313,7 @@ selection:
   oh_cutoff: 1.25
 
 defect_tracking:
-  timestep_ps: 0.1
+  timestep_ps: 0.01
   gate_A: 3.0
   pbc: [true, true, false]
   layer:
@@ -324,6 +324,7 @@ defect_tracking:
     range: [-0.5, 4.0]
 
 defect_msd:
+  frame_stride: 10
   dimensionality: 2d
   plane_normal_axis: z
   max_lag_frames: 2000

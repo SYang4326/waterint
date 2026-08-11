@@ -79,6 +79,7 @@ def run_defect_analysis(config: dict[str, Any], *, charge_e: float = -1.0) -> De
         tracking,
         max_lag_frames=optional_positive_int(msd_cfg.get("max_lag_frames")),
         origin_stride=positive_int(msd_cfg.get("origin_stride", 1), "defect_msd.origin_stride"),
+        frame_stride=positive_int(msd_cfg.get("frame_stride", 1), "defect_msd.frame_stride"),
         dimensionality=msd_cfg.get("dimensionality", "3d"),
         plane_normal_axis=axis_from_value(msd_cfg.get("plane_normal_axis", "z")),
     )

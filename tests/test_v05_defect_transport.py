@@ -66,6 +66,17 @@ class V05DefectTransportTests(unittest.TestCase):
         np.testing.assert_allclose(msd.msd_a2, [0.0, 1.0, 4.0])
         np.testing.assert_array_equal(msd.samples, [5, 3, 1])
 
+        strided_msd = module.compute_defect_msd(
+            tracking,
+            max_lag_frames=1,
+            frame_stride=2,
+            dimensionality="2d",
+            plane_normal_axis=2,
+        )
+        np.testing.assert_allclose(strided_msd.time_ps, [0.0, 2.0])
+        np.testing.assert_allclose(strided_msd.msd_a2, [0.0, 4.0])
+        np.testing.assert_array_equal(strided_msd.samples, [3, 1])
+
     def test_defect_workflows_classify_each_frame_and_write_tracks(self) -> None:
         msd_workflow = importlib.import_module("waterint._04_workflows.workflows.defect_msd")
         conductivity_workflow = importlib.import_module(

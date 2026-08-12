@@ -68,6 +68,9 @@ def run_proton_sharing(config: dict[str, Any]) -> ProtonSharingWorkflowResult:
         frame_pair_counts, frame_shared_counts = frame_result.counts, frame_result.shared_counts
         frame_pair_samples, frame_shared_samples = frame_result.pair_samples, frame_result.shared_samples
         if include_swapped_state:
+            # Select the exchanged state: H2O remains the proton donor, now on
+            # the opposite layer, while OH- is the acceptor on the original
+            # donor layer. The resulting L2 -> L1 coordinate is sign-reversed.
             swapped_donor_cfg = {**acceptor_cfg, "species": donor_cfg["species"]}
             swapped_acceptor_cfg = {**donor_cfg, "species": acceptor_cfg["species"]}
             swapped_donor_mask = species_layer_mask(coordination, z_values, swapped_donor_cfg)

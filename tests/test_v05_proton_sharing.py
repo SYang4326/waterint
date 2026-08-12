@@ -81,6 +81,34 @@ class V05ProtonSharingTests(unittest.TestCase):
             self.assertTrue(result.shared_csv_path.exists())
             self.assertIn("delta_A,R_OO_A", result.fes_csv_path.read_text(encoding="utf-8"))
 
+    def test_swapped_state_uses_reversed_species(self) -> None:
+        workflow = importlib.import_module("waterint._04_workflows.workflows.proton_sharing")
+        # The only selected pair is the exchanged L2-H2O / L1-OH- state.
+        positions = np.asarray([[
+            [0.0, 0.0, 1.8], [2.4, 0.0, 1.8],
+            [1.2, 0.0, 1.8], [0.0, 0.0, 2.8], [2.4, 0.0, 0.6],
+        ]], dtype=float)
+        types = np.asarray([[3, 3, 1, 1, 1]])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            np.savez(root / "trajectory.npz", positions=positions, types=types, cells=np.asarray([[10.0, 10.0, 10.0]]), steps=np.asarray([0]))
+            config = {
+                "_config_dir": str(root),
+                "input": {"trajectory": "trajectory.npz", "format": "npz", "type_map": {1: "H", 3: "O"}},
+                "system": {"cell": "auto"},
+                "selection": {"oxygen_symbol": "O", "hydrogen_symbol": "H", "oh_cutoff": 1.25, "pbc": [True, True, False]},
+                "proton_sharing": {
+                    "temperature_K": 300.0,
+                    "coordinate": {"mode": "relative_to_slab", "axis": "z", "reference": {"type": "fixed", "value": 0.0}},
+                    "donor": {"species": "H2O", "range": [1.5, 2.8]}, "acceptor": {"species": "OH-", "range": [1.5, 2.8]},
+                    "include_swapped_state": True, "oo_range_A": [2.0, 3.0], "delta_range_A": [-1.5, 1.5], "delta_bins": 30, "oo_bins": 20,
+                    "shared_delta_max_A": 0.2, "shared_s_range_A": [-1.5, 1.5], "shared_rho_range_A": [0.0, 1.5], "shared_s_bins": 30, "shared_rho_bins": 15,
+                },
+                "output": {"directory": "output", "prefix": "sharing", "plot": False},
+            }
+            result = workflow.run_proton_sharing(config)
+            self.assertEqual(result.pair_samples, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

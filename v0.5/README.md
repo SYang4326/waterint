@@ -2,6 +2,8 @@
 
 WaterInt v0.5 extends the v0.4 registry architecture with fixed-atom and dynamic-defect transport workflows. Stable ions can use fixed-atom MSD and Nernst--Einstein conductivity. Identity-changing proton defects must use framewise species classification, Hungarian defect tracking, lifetime-aware defect MSD, and preferably collective Green--Kubo conductivity through STACIE.
 
+`proton-sharing` accumulates a layer- and species-selective proton-transfer free-energy surface. It writes `F(delta, R_OO)`, where `delta = r(O_d,H)-r(H,O_a)`, plus the shared-state local-coordinate `F(s,rho)` projection with the cylindrical `2*pi*rho` Jacobian removed. Donor and acceptor classes are assigned independently in every frame from nearest-O H coordination and a slab-relative coordinate. `include_swapped_state: true` (the default) also incorporates the exchanged donor/acceptor species on the opposite layers with reversed `delta` and `s`, so a transfer FES contains both chemical states rather than only the initially named one.
+
 Documentation website:
 
 https://water-interface-analysis.syang4326m.workers.dev/

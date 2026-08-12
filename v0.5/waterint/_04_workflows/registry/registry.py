@@ -13,6 +13,7 @@ from waterint._04_workflows.workflows.defect_conductivity import run_defect_cond
 from waterint._04_workflows.workflows.defect_msd import run_defect_msd
 from waterint._04_workflows.workflows.rdf import run_rdf
 from waterint._04_workflows.workflows.sfg import run_sfg
+from waterint._04_workflows.workflows.proton_sharing import run_proton_sharing
 
 
 def print_density_outputs(result: Any) -> None:
@@ -92,6 +93,14 @@ def print_rdf_outputs(result: Any) -> None:
     print(f"Wrote: {result.metadata_path}")
 
 
+def print_proton_sharing_outputs(result: Any) -> None:
+    print(f"Wrote: {result.fes_csv_path}")
+    print(f"Wrote: {result.shared_csv_path}")
+    if result.png_path:
+        print(f"Wrote: {result.png_path}")
+    print(f"Wrote: {result.metadata_path}")
+
+
 ANALYSIS_MODULES: tuple[AnalysisModule, ...] = (
     AnalysisModule(
         name="density",
@@ -159,6 +168,14 @@ ANALYSIS_MODULES: tuple[AnalysisModule, ...] = (
         run=run_rdf,
         print_outputs=print_rdf_outputs,
         description="Compute element-, type-, species-, and layer-selective radial distribution functions.",
+    ),
+    AnalysisModule(
+        name="proton-sharing",
+        help="Run a proton-sharing free-energy-surface workflow.",
+        run=run_proton_sharing,
+        print_outputs=print_proton_sharing_outputs,
+        aliases=("proton-fes",),
+        description="Accumulate F(delta, R_OO) and a shared-proton local-coordinate F(s, rho) for selected donor-acceptor layers.",
     ),
 )
 

@@ -12,7 +12,9 @@ from waterint._04_workflows.workflows.defect_msd import run_defect_msd
 from waterint._02_computation.conductivity import ConductivityResult
 from waterint._02_computation.defect_transport import DefectMsdResult, DefectTrackingResult
 from waterint._02_computation.proton_sharing import ProtonSharingResult
+from waterint._02_computation.proton_sharing_hbond import ProtonSharingHbondState
 from waterint._04_workflows.workflows.proton_sharing import run_proton_sharing
+from waterint._04_workflows.workflows.proton_sharing_hbond import run_proton_sharing_hbond
 
 __all__ = [
     "OhOrientationResult",
@@ -26,6 +28,7 @@ __all__ = [
     "DefectMsdResult",
     "DefectTrackingResult",
     "ProtonSharingResult",
+    "ProtonSharingHbondState",
     "compute_density_profile",
     "run_angle_z",
     "run_oh_orientation",
@@ -36,4 +39,5 @@ __all__ = [
     "run_defect_conductivity",
     "run_defect_msd",
     "run_proton_sharing",
+    "run_proton_sharing_hbond",
 ]

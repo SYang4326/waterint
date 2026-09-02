@@ -14,6 +14,7 @@ from waterint._04_workflows.workflows.defect_msd import run_defect_msd
 from waterint._04_workflows.workflows.rdf import run_rdf
 from waterint._04_workflows.workflows.sfg import run_sfg
 from waterint._04_workflows.workflows.proton_sharing import run_proton_sharing
+from waterint._04_workflows.workflows.proton_sharing_hbond import run_proton_sharing_hbond
 
 
 def print_density_outputs(result: Any) -> None:
@@ -101,6 +102,12 @@ def print_proton_sharing_outputs(result: Any) -> None:
     print(f"Wrote: {result.metadata_path}")
 
 
+def print_proton_sharing_hbond_outputs(result: Any) -> None:
+    print(f"Wrote outputs: {result.output_directory}")
+    print(f"Wrote: {result.metadata_path}")
+    print(f"Frames: {result.frames}; L1-L1 pairs: {result.l1_l1_pairs}; L1-L2 pairs: {result.l1_l2_pairs}")
+
+
 ANALYSIS_MODULES: tuple[AnalysisModule, ...] = (
     AnalysisModule(
         name="density",
@@ -176,6 +183,14 @@ ANALYSIS_MODULES: tuple[AnalysisModule, ...] = (
         print_outputs=print_proton_sharing_outputs,
         aliases=("proton-fes",),
         description="Accumulate F(delta, R_OO) and a shared-proton local-coordinate F(s, rho) for selected donor-acceptor layers.",
+    ),
+    AnalysisModule(
+        name="proton-sharing-hbond",
+        help="Run H-bond-filtered, CN-resolved proton-sharing PES.",
+        run=run_proton_sharing_hbond,
+        print_outputs=print_proton_sharing_hbond_outputs,
+        aliases=("proton-fes-hbond",),
+        description="Accumulate globally pooled unit-pair F(delta, R_OO) surfaces with optional L1 acceptor H-bond coordination classes.",
     ),
 )
 

@@ -382,6 +382,31 @@ def hydrogen_neighbor_matrix(
         raise RuntimeError(f"C++ O-H neighbor-list kernel failed with status {status}.")
 
 
+def proton_hbond_accumulate(donor_positions: np.ndarray, acceptor_positions: np.ndarray, hydrogen_positions: np.ndarray, hydrogen_counts: np.ndarray, hydrogen_matrix: np.ndarray, *, cell: np.ndarray, pbc: tuple[bool, bool, bool], oo_range: tuple[float, float], angle_min: float, delta_edges: np.ndarray, oo_edges: np.ndarray, hist: np.ndarray) -> tuple[np.ndarray, int, int] | None:
+    """Accumulate H-bond-qualified pairs in the native proton-sharing kernel."""
+    lib = native_library()
+    if lib is None:
+        return None
+    d=np.ascontiguousarray(donor_positions,dtype=np.float64); a=np.ascontiguousarray(acceptor_positions,dtype=np.float64); h=np.ascontiguousarray(hydrogen_positions,dtype=np.float64)
+    counts=np.ascontiguousarray(hydrogen_counts,dtype=np.int64); matrix=np.ascontiguousarray(hydrogen_matrix,dtype=np.int64); de=np.ascontiguousarray(delta_edges,dtype=np.float64); oe=np.ascontiguousarray(oo_edges,dtype=np.float64); output=np.ascontiguousarray(hist,dtype=np.float64).copy(); lengths=np.ascontiguousarray(cell,dtype=np.float64); flags=np.ascontiguousarray([int(value) for value in pbc],dtype=np.uint8); pairs=np.array(0,dtype=np.int64); acceptors=np.array(0,dtype=np.int64)
+    status=lib.waterint_proton_hbond_accumulate(d.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),ctypes.c_size_t(len(d)),a.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),ctypes.c_size_t(len(a)),h.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),ctypes.c_size_t(len(h)),counts.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),matrix.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),ctypes.c_size_t(matrix.shape[1]),lengths.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),flags.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),ctypes.c_double(oo_range[0]),ctypes.c_double(oo_range[1]),ctypes.c_double(angle_min),de.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),ctypes.c_size_t(len(de)-1),oe.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),ctypes.c_size_t(len(oe)-1),output.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),pairs.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),acceptors.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)))
+    if status != 0:
+        raise RuntimeError(f"C++ proton H-bond kernel failed with status {status}.")
+    return output, int(pairs), int(acceptors)
+
+
+def nearest_oh_assignment(oxygen_positions: np.ndarray, hydrogen_positions: np.ndarray, *, cutoff: float, cell: np.ndarray, pbc: tuple[bool, bool, bool]) -> tuple[np.ndarray, np.ndarray] | None:
+    """Perform unique nearest-O H assignment in C++ for an orthorhombic cell."""
+    lib = native_library()
+    if lib is None:
+        return None
+    oxygen=np.ascontiguousarray(oxygen_positions,dtype=np.float64); hydrogen=np.ascontiguousarray(hydrogen_positions,dtype=np.float64); capacity=max(4,len(hydrogen)); counts=np.zeros(len(oxygen),dtype=np.int64); matrix=np.full((len(oxygen),capacity),-1,dtype=np.int64); lengths=np.ascontiguousarray(cell,dtype=np.float64); flags=np.ascontiguousarray([int(value) for value in pbc],dtype=np.uint8)
+    status=lib.waterint_nearest_oh_assignment(oxygen.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),ctypes.c_size_t(len(oxygen)),hydrogen.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),ctypes.c_size_t(len(hydrogen)),ctypes.c_double(cutoff),lengths.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),flags.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),ctypes.c_size_t(capacity),counts.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),matrix.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)))
+    if status != 0:
+        raise RuntimeError(f"C++ nearest O-H assignment failed with status {status}.")
+    return counts, matrix
+
+
 def hbond_geometry_counts(
     oxygen_positions: np.ndarray,
     hydrogen_positions: np.ndarray,
@@ -1006,6 +1031,10 @@ def native_library() -> ctypes.CDLL | None:
             ctypes.POINTER(ctypes.c_int64),
         ]
         lib.waterint_hbond_geometry_counts.restype = ctypes.c_int
+        lib.waterint_proton_hbond_accumulate.argtypes = [ctypes.POINTER(ctypes.c_double),ctypes.c_size_t,ctypes.POINTER(ctypes.c_double),ctypes.c_size_t,ctypes.POINTER(ctypes.c_double),ctypes.c_size_t,ctypes.POINTER(ctypes.c_int64),ctypes.POINTER(ctypes.c_int64),ctypes.c_size_t,ctypes.POINTER(ctypes.c_double),ctypes.POINTER(ctypes.c_uint8),ctypes.c_double,ctypes.c_double,ctypes.c_double,ctypes.POINTER(ctypes.c_double),ctypes.c_size_t,ctypes.POINTER(ctypes.c_double),ctypes.c_size_t,ctypes.POINTER(ctypes.c_double),ctypes.POINTER(ctypes.c_int64),ctypes.POINTER(ctypes.c_int64)]
+        lib.waterint_proton_hbond_accumulate.restype = ctypes.c_int
+        lib.waterint_nearest_oh_assignment.argtypes = [ctypes.POINTER(ctypes.c_double),ctypes.c_size_t,ctypes.POINTER(ctypes.c_double),ctypes.c_size_t,ctypes.c_double,ctypes.POINTER(ctypes.c_double),ctypes.POINTER(ctypes.c_uint8),ctypes.c_size_t,ctypes.POINTER(ctypes.c_int64),ctypes.POINTER(ctypes.c_int64)]
+        lib.waterint_nearest_oh_assignment.restype = ctypes.c_int
         lib.waterint_sfg_ssvvcf.argtypes = [
             ctypes.POINTER(ctypes.c_double),
             ctypes.POINTER(ctypes.c_double),

@@ -1,0 +1,36 @@
+input:
+  trajectory: /path/to/trajectory.lammpstrj
+  format: lammpstrj
+  type_map: {1: H, 2: Mg, 3: O}
+  reader: python
+  stride: 1
+  max_frames: all
+system: {cell: auto}
+selection:
+  oxygen_symbol: O
+  hydrogen_symbol: H
+  pbc: [true, true, false]
+proton_sharing_hbond:
+  temperature_K: 300.0
+  coordinate:
+    mode: relative_to_slab
+    axis: z
+    reference: {type: top_layer_mean, species: [Mg], surface: max, layer_width: 0.7}
+  l1_range: [1.5, 2.8]
+  l2_range: [2.8, 4.0]
+  oh_assignment_cutoff_A: 1.50
+  oo_range_A: [2.20, 3.20]
+  dha_angle_min_deg: 150.0
+  delta_range_A: [-1.5, 1.5]
+  delta_bins: 120
+  oo_bins: 100
+  classify_l1_acceptor_cn: true
+  cn_values: [1, 2, 3, 4]
+  include_l1_l1: true
+  include_l1_l2: true
+  backend: cpp
+  pooling: global_pairs
+  l1_l1_delta_symmetrize: true
+output:
+  directory: output/proton_sharing_hbond
+  prefix: mgo

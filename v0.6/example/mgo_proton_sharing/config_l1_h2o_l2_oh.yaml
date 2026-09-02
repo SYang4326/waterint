@@ -1,0 +1,41 @@
+input:
+  trajectory: ../shared/input/dump.MgO_water_2x2_equil.last100ps.unique.waterint.npz
+  format: npz
+  type_map: {1: H, 2: Mg, 3: O}
+  stride: 1
+  max_frames: all
+
+system: {cell: auto}
+
+selection:
+  oxygen_symbol: O
+  hydrogen_symbol: H
+  oh_cutoff: 1.25
+  pbc: [true, true, false]
+
+proton_sharing:
+  temperature_K: 300.0
+  coordinate:
+    mode: relative_to_slab
+    axis: z
+    reference: {type: top_layer_mean, species: [Mg], surface: max, layer_width: 0.7}
+  donor: {species: H2O, range: [1.5, 2.8]}
+  acceptor: {species: OH-, range: [2.8, 4.0]}
+  # Also include the exchanged L1-OH- / L2-H2O state after sign reversal,
+  # so the FES spans both sides of the L1 -> L2 proton-transfer coordinate.
+  include_swapped_state: true
+  oo_range_A: [2.3, 3.6]
+  delta_range_A: [-1.5, 1.5]
+  delta_bins: 120
+  oo_bins: 130
+  shared_delta_max_A: 0.15
+  shared_s_range_A: [-1.5, 1.5]
+  shared_rho_range_A: [0.0, 1.5]
+  shared_s_bins: 120
+  shared_rho_bins: 75
+
+output:
+  directory: output/proton_sharing
+  prefix: l1_h2o_l2_oh_proton_sharing
+  plot: true
+  title: L1-H2O to L2-OH- proton sharing

@@ -24,6 +24,12 @@ https://water-interface-analysis.syang4326m.workers.dev/
 - Added `defect-msd`: framewise oxygen-species classification, gated Hungarian tracking, PBC-unwrapped defect segments, and lifetime-aware multiple-time-origin MSD.
 - Added `defect-conductivity`: defect-MSD Nernst--Einstein for comparison and collective STACIE Green--Kubo as the recommended proton-defect estimator.
 - Kept Python as the public API and fallback path.
+- Added `proton-sharing-hbond`: H-bond-filtered, CN-resolved proton-sharing
+  PES. It retains every qualifying donor--acceptor pair with unit weight and
+  performs global pooled normalization. `backend: cpp` accelerates nearest-O
+  assignment, D-H-A filtering, CN classification, and histogram accumulation;
+  `backend: python` is the reference fallback. See
+  `example/mgo_proton_sharing/config_hbond_cn.yaml`.
 
 The chemistry layer provides corresponding shared Python and C++ cell-list implementations. Density uses count-only queries, while O-H orientation and H-bond analysis reuse full O-H neighbor identities. H-bond analysis uses the same spatial-search abstraction for O-O acceptor candidates.
 

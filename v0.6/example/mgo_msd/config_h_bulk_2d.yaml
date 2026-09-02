@@ -1,0 +1,32 @@
+input:
+  trajectory: ../shared/input/dump.MgO_water_2x2_equil.last100ps.unique.waterint.npz
+  format: npz
+  type_map: {1: H, 2: Mg, 3: O}
+  max_frames: all
+  stride: 1
+
+system: {cell: auto}
+
+selection:
+  elements: [H]
+
+msd:
+  backend: auto
+  timestep_ps: 0.005
+  dimensionality: "2d"
+  plane_normal_axis: z
+  pbc: [true, true, false]
+  max_lag_frames: 2000
+  origin_stride: 10
+  layer:
+    coordinate:
+      mode: relative_to_slab
+      axis: z
+      reference: {type: slab_surface, species: [Mg], surface: max}
+    range: [4.0, 30.0]
+
+output:
+  directory: output/layer_msd
+  prefix: mgo_h_4_30A_msd_2d
+  plot: true
+  title: H 2D MSD, 4-30 A from MgO surface

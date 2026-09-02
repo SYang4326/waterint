@@ -16,7 +16,7 @@ cd waterint
 python -m pip install -e .
 ```
 
-This installs the active package from [`v0/waterint`](v0/waterint), while the import name and command remain stable:
+This installs the active package from [`v0.6/waterint`](v0.6/waterint), while the import name and command remain stable:
 
 ```bash
 waterint --help
@@ -33,25 +33,25 @@ python -m pip install -e . --no-build-isolation
 Run an analysis by passing a YAML config to a module command:
 
 ```bash
-waterint density --config v0/example/mgo_density/config_oh_h2o_npz.yaml
+waterint density --config v0.6/example/mgo_density/config_oh_h2o_npz.yaml
 ```
 
 Other current module commands include:
 
 ```bash
-waterint oh-orientation --config v0/example/mgo_oh_orientation/config_oh_h2o_h3o_npz.yaml
-waterint hbond --config v0/example/mgo_hbond/config_oh_h2o_h3o_npz.yaml
-waterint sfg --config v0/example/mgo_sfg/config_100ps_npz.yaml
+waterint oh-orientation --config v0.6/example/mgo_oh_orientation/config_oh_h2o_h3o_npz.yaml
+waterint hbond --config v0.6/example/mgo_hbond/config_oh_h2o_h3o_npz.yaml
+waterint sfg --config v0.6/example/mgo_sfg/config_100ps_npz.yaml
 ```
 
-The shared MgO-water 100 ps trajectory cache is large, so it is not intended to be stored in ordinary Git history. See [`v0/example/README.md`](v0/example/README.md) for the expected example-data layout.
+The shared MgO-water 100 ps trajectory cache is large, so it is not intended to be stored in ordinary Git history. See [`v0.6/example/README.md`](v0.6/example/README.md) for the expected example-data layout.
 
 ## Package Structure
 
-The repository keeps the current version line in [`v0/`](v0/), but the Python package inside is named `waterint`. This means future version directories can be added without forcing user code to use versioned package names.
+The repository keeps the current version line in [`v0.6/`](v0.6/), but the Python package inside is named `waterint`. This means future version directories can be added without forcing user code to use versioned package names.
 
 ```text
-v0/
+v0.6/
   README.md        version-line notes
   example/         publication-facing example configs and outputs
   waterint/        Python package installed as waterint
@@ -73,7 +73,7 @@ Coordinate references can be recomputed from selected atoms, such as a slab surf
 
 ## Version Notes
 
-- Active editable-install version line: `v0`
+- Active editable-install version line: `v0.6`
 - Experimental architecture version line: [`v0.2`](v0.2/README.md)
 - Last reorganized: 2026-07-06
 - Python package import: `waterint`

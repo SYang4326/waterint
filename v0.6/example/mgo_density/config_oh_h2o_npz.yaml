@@ -1,0 +1,49 @@
+input:
+  trajectory: ../shared/input/dump.MgO_water_2x2_equil.last100ps.unique.waterint.npz
+  format: npz
+  type_map:
+    1: H
+    2: Mg
+    3: O
+  max_frames: all
+  stride: 1
+
+system:
+  cell: auto
+
+selection:
+  mode: oxygen_species
+  oxygen_species:
+    - OH-
+    - H2O
+  oxygen_symbol: O
+  hydrogen_symbol: H
+  oh_cutoff: 1.25
+  neighbor_method: auto
+  neighbor_workers: 1
+
+density:
+  backend: auto
+
+coordinate:
+  mode: relative_to_slab
+  axis: z
+  reference:
+    type: slab_surface
+    species:
+      - Mg
+    surface: max
+  range:
+    - -1.0
+    - 30.0
+  bins: 310
+
+normalization:
+  type: mass_density
+  unit: g/cm^3
+
+output:
+  directory: output
+  prefix: mgo_oh_h2o_density_npz_full100ps
+  plot: true
+  title: OH- and H2O density relative to MgO slab

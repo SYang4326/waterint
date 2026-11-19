@@ -8,6 +8,13 @@ build/
 dist/
 *.egg-info/
 examples/**/output*/
-v*/example/shared/input/*.npz
+examples/shared/input/*.npz
 _local_archive/
 .DS_Store
+__pycache__/
+*.pyc
+.pytest_cache/
+*.so
+src/waterint/backends/cpu/_build/
+validation_*/
+_v06_reference/

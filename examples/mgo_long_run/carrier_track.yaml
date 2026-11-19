@@ -1,0 +1,3 @@
+input:
+  events: [pass/seg_00/pass_events.npz, pass/seg_01/pass_events.npz]   # all segments of one run, in order
+output: {directory: carrier, prefix: carrier}

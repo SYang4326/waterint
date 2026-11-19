@@ -1,0 +1,64 @@
+# WaterInt system profile: MgO(100)-water slab.
+# A new interface system = a new profile file; no code changes.
+profile_id: mgo_water
+description: MgO(100)-water slab; nearest-acceptor H ownership; layers relative to the top Mg layer.
+
+# element names by LAMMPS type (GPUMD/xyz inputs carry element names directly)
+lammps_type_map: {1: H, 2: Mg, 3: O}
+
+# integer formal (oxidation-state) charges, in e
+formal_charges: {H: 1, O: -2, Mg: 2}
+protons: [H]          # atoms whose owner changes (charge +1)
+acceptors: [O]        # atoms that can own protons; site charge = formal charge + nH
+
+h_assignment:
+  cutoff_A: 1.50          # H is owned by the nearest acceptor within this distance, else free (+1)
+  tie_tolerance_A: 1.0e-8 # equal-distance ties within this tolerance -> smallest atom ID
+
+pbc: [true, true, false]  # x, y periodic; z open (slab)
+
+# per-frame reference plane z_ref; heights are z_rel = z - z_ref
+reference:
+  elements: [Mg]
+  mode: top_layer          # top_layer | bottom_layer | mean | fixed | none
+  layer_width_A: 0.70      # atoms within this distance of the extreme height form the layer
+
+# solid identity, frozen at the first frame (assumes no dissolution / reconstruction)
+solid:
+  elements: [O]
+  max_z_rel_A: 0.70        # acceptors of these elements with z <= z_ref + 0.70 A in frame 0 are solid
+  expected_count: 288
+
+expected_counts: {Mg: 288}
+
+# species label of an acceptor by (solid or not, nH); the largest key means "this many or more"
+species:
+  acceptor: {0: O2-, 1: OH-, 2: H2O, 3: H3O+, 4: O_other}
+  solid:    {0: Os, 1: Os_H, 2: Os_H2, 3: Os_H3, 4: Os_other}
+
+# named z_rel windows, half-open [lo, hi)
+windows:
+  - [below_L1, -.inf, 1.5]
+  - [L1, 1.5, 2.8]
+  - [L2, 2.8, 4.0]
+  - [bulk, 4.0, 30.0]
+  - [above, 30.0, .inf]
+
+# acceptor species whose site positions the event pass records (carrier candidates for tracking)
+tracked_species: [OH-, H3O+, Os_H]
+
+# current decomposition groups: species labels, fixed-charge element names, and the special terms
+# free_H (motion of unowned H), transfer (H owner changes) and image (periodic bookkeeping)
+current_groups:
+  OH-: [OH-]
+  H3O+: [H3O+]
+  H2O: [H2O]
+  surface: [Os, Os_H, Os_H2, Os_H3, Os_other, Mg]
+  other: [O2-, O_other, free_H]
+  transfer: [transfer]
+  image: [image]
+
+# relabelled trajectories (analysis relabel): regions and label names of the v0.6 standard type-code catalog (1-27)
+relabel:
+  regions: [L1, L2, bulk]
+  names: {Mg: lattice_Mg, O2-: O2minus, OH-: OH, H3O+: H3Oplus}

@@ -1,14 +1,14 @@
 # WaterInt
 
-WaterInt is a Python toolkit for reproducible analysis of water-containing molecular simulations, with a focus on interfacial water and confined water systems. It organizes common analyses such as density profiles, O-H orientation, hydrogen-bond topology, and SFG-related workflows around explicit YAML configs, reusable computation modules, and standard output files.
+WaterInt analyses molecular-dynamics trajectories of water at solid interfaces (oxides, carbonates, metals, ...).
+One pipeline reads a trajectory once, prepares every frame once (H ownership, oxygen species, reference plane,
+layers, hydrogen bonds) and feeds all requested analyses in the same pass: density, O-H orientation, H-bond
+topology, RDF, MSD, conductivity (Nernst-Einstein, Green-Kubo, site currents), SFG spectra, proton-sharing free
+energies, identity transitions, carrier tracking, and relabelled trajectories.
 
-Documentation website:
-
-https://water-interface-analysis.syang4326m.workers.dev/
+Documentation: https://water-interface-analysis.syang4326m.workers.dev/
 
 ## Install
-
-Clone the repository and install it from the repository root:
 
 ```bash
 git clone https://github.com/SYang4326/waterint.git
@@ -16,65 +16,65 @@ cd waterint
 python -m pip install -e .
 ```
 
-This installs the active package from [`v0/waterint`](v0/waterint), while the import name and command remain stable:
+Core dependencies: numpy, scipy, matplotlib, PyYAML. A C++ compiler is optional (hot kernels compile on first use
+and are cached; without one, the Python reference implementation runs). CUDA is optional and only used by analyses
+that offer a `gpu` backend. `pip install -e .[transport]` adds STACIE for Green-Kubo fits.
+
+## Use
+
+One pipeline, several analyses:
+
+```yaml
+# run.yaml
+input:
+  trajectory: dump.lammpstrj
+  format: lammpstrj
+  type_map: {1: H, 2: Mg, 3: O}
+system:
+  profile: mgo_water     # or generic_oxide_water for any oxide/water slab
+output:
+  directory: out
+analyses:
+  - {type: density, name: rho_species, selection: {mode: oxygen_species, oxygen_species: all},
+     coordinate: {range: [-1.0, 30.0], bins: 310}}
+  - {type: hbond, name: hb}
+  - {type: msd, name: msd_o, selection: {elements: [O]}, msd: {timestep_ps: 0.01, dimensionality: 2d}}
+```
 
 ```bash
-waterint --help
+waterint run run.yaml
 ```
 
-If an older conda or pip build environment has trouble with editable-install build isolation, use:
+Single analyses with v0.6-style configs keep working (`waterint density --config cfg.yaml`); the examples in
+`examples/` use this form. Other commands: `waterint list` (analyses and parameters), `waterint backends`,
+`waterint profile <name>`, `waterint convert-lammpstrj`, `waterint ui`, `waterint web-ui`.
+
+## Layout
+
+```
+src/waterint/
+  io/         readers (lammpstrj, xyz, npz, GPUMD qnpz), blocks, writers
+  system/     SystemProfile + profiles/*.yaml (everything system-specific)
+  prep/       ownership, species, reference plane, H bonds -> LabelledFrame
+  analysis/   one Analysis class per method (stream | block | post)
+  backends/   kernel registry: python reference, optional cpu (C++/OpenMP), optional gpu (CUDA)
+  pipeline/   one-pass run, v0.6 config migration
+  plot/       figures from results only
+  registry.py the analysis list used by the CLI, the UI and the docs generator
+  ui/         local desktop and browser UI
+tools/gen_docs.py   registry -> docs site pages
+```
+
+Design: `docs/ARCHITECTURE_v0.7.md`. Verification: every analysis reproduces v0.6 on MgO-water and TiO2-water
+trajectories (integer counts exactly, floats bit for bit, apart from one 1e-14 OpenMP summation-order difference), and
+27 MACE trajectories of oxide, carbonate and metal interfaces pass conservation and consistency checks with one generic
+profile. Earlier versions (v0.2-v0.6) are in the git history; tag `v0.6` is the last v0.6 release.
+
+## Tests
 
 ```bash
-python -m pip install -e . --no-build-isolation
+python -m pytest tests
 ```
 
-## Usage
-
-Run an analysis by passing a YAML config to a module command:
-
-```bash
-waterint density --config v0/example/mgo_density/config_oh_h2o_npz.yaml
-```
-
-Other current module commands include:
-
-```bash
-waterint oh-orientation --config v0/example/mgo_oh_orientation/config_oh_h2o_h3o_npz.yaml
-waterint hbond --config v0/example/mgo_hbond/config_oh_h2o_h3o_npz.yaml
-waterint sfg --config v0/example/mgo_sfg/config_100ps_npz.yaml
-```
-
-The shared MgO-water 100 ps trajectory cache is large, so it is not intended to be stored in ordinary Git history. See [`v0/example/README.md`](v0/example/README.md) for the expected example-data layout.
-
-## Package Structure
-
-The repository keeps the current version line in [`v0/`](v0/), but the Python package inside is named `waterint`. This means future version directories can be added without forcing user code to use versioned package names.
-
-```text
-v0/
-  README.md        version-line notes
-  example/         publication-facing example configs and outputs
-  waterint/        Python package installed as waterint
-    core/          shared simulation-domain helpers
-    io/            trajectory readers and cache support
-    computation/   numerical analysis modules
-    workflows/     config-driven orchestration
-    output/        CSV, metadata, and plotting utilities
-```
-
-The main modules are:
-
-- `density`: density profiles along an absolute or surface-relative coordinate.
-- `oh-orientation`: O-H orientation distributions resolved along a coordinate.
-- `hbond`: hydrogen-bond topology classification by oxygen species.
-- `sfg`: trajectory-based interfacial O-H correlation and spectrum workflows.
-
-Coordinate references can be recomputed from selected atoms, such as a slab surface, or supplied as a fixed value when the reference plane is already known.
-
-## Version Notes
-
-- Active editable-install version line: `v0`
-- Experimental architecture version line: [`v0.2`](v0.2/README.md)
-- Last reorganized: 2026-07-06
-- Python package import: `waterint`
-- CLI command: `waterint`
+`tests/test_v06_equivalence.py` compares against a v0.6 checkout (`WATERINT_V06`) and is skipped without one.
+Real-data regression scripts: `tests/regression/README.md`.

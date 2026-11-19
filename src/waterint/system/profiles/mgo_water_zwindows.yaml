@@ -1,0 +1,31 @@
+# MgO-water profile with a cumulative z-window grid ([1, h) with h = 4.5 + 3.5 k). Same definitions as
+# mgo_water (charges, H ownership, reference plane, solid); only the windows and a single
+# current group differ. Cumulative-window conductances are sums of sub-blocks of the window Helfand matrix.
+profile_id: mgo_water_zwindows
+lammps_type_map: {1: H, 2: Mg, 3: O}
+formal_charges: {H: 1, O: -2, Mg: 2}
+protons: [H]
+acceptors: [O]
+h_assignment: {cutoff_A: 1.50, tie_tolerance_A: 1.0e-8}
+pbc: [true, true, false]
+reference: {elements: [Mg], mode: top_layer, layer_width_A: 0.70}
+solid: {elements: [O], max_z_rel_A: 0.70, expected_count: 288}
+expected_counts: {Mg: 288}
+species:
+  acceptor: {0: O2-, 1: OH-, 2: H2O, 3: H3O+, 4: O_other}
+  solid:    {0: Os, 1: Os_H, 2: Os_H2, 3: Os_H3, 4: Os_other}
+windows:
+  - [below_1.0, -.inf, 1.0]
+  - [w1.0-4.5, 1.0, 4.5]
+  - [w4.5-8.0, 4.5, 8.0]
+  - [w8.0-11.5, 8.0, 11.5]
+  - [w11.5-15.0, 11.5, 15.0]
+  - [w15.0-18.5, 15.0, 18.5]
+  - [w18.5-22.0, 18.5, 22.0]
+  - [w22.0-25.5, 22.0, 25.5]
+  - [w25.5-29.0, 25.5, 29.0]
+  - [w29.0-32.5, 29.0, 32.5]
+  - [above_32.5, 32.5, .inf]
+tracked_species: [OH-, H3O+, Os_H]
+current_groups:
+  total: [O2-, OH-, H2O, H3O+, O_other, Os, Os_H, Os_H2, Os_H3, Os_other, Mg, free_H, transfer, image]

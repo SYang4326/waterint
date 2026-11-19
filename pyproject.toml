@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "waterint"
-version = "0.1.0"
+version = "0.7.0.dev0"
 description = "Config-driven analysis tools for water-containing molecular simulations."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -22,5 +22,8 @@ transport = ["stacie>=1.2"]
 waterint = "waterint.cli:main"
 
 [tool.setuptools.packages.find]
-where = ["v0"]
+where = ["src"]
 include = ["waterint*"]
+
+[tool.setuptools.package-data]
+waterint = ["system/profiles/*.yaml", "backends/cpu/*.cpp", "backends/cpu/*.hpp", "backends/gpu/*.cu"]

@@ -1,0 +1,11 @@
+profile: mgo_water
+input:
+  format: gpumd-qnpz
+  segments: [run/seg_00, run/seg_01]
+  prefetch: 3
+hb_correlation:
+  window_frames: 100000
+  block_frames: 250000                      # 1 ns at 4 fs
+  msd_stride_frames: 10
+  msd_max_lag_frames: 250000                # strided frames (10 ns)
+output: {directory: hbc, prefix: hbc, plot: true}

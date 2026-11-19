@@ -1,0 +1,11 @@
+# One site-current pass per segment (run segments as independent jobs; seed each with the previous segment's last frame).
+profile: mgo_water
+input:
+  format: gpumd-qnpz
+  segments: [run/seg_00]
+  solid_from: run/seg_00          # solid frozen at the first frame of the whole run
+  # seed_segment: run/seg_00      # for seg_01 onwards: previous segment
+  # first_frame_index: 500000     # global index of this segment's first frame
+site_current: {decomposition: true}
+events: {enabled: true, counts_stride: 10, sites_stride: 10}
+output: {directory: pass/seg_00, prefix: pass, level: compact, decomposition_coarsen: 10}

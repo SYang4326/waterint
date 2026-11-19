@@ -1,0 +1,35 @@
+# WaterInt system profile: any oxide/carbonate slab + water (no element names in code or here).
+# Generic rule (canonical ownership): H belongs to the nearest O within 1.25 A (x/y periodic, z open; ties within
+# 1e-8 A -> lowest index). NOTE: the 2026-08-17 OMOL density profiles counted an H for EVERY O within 1.25 A
+# (all_within_cutoff); reproduce them with prep.ownership: {mode: all_within_cutoff}. Otherwise identical:
+#   - solid atoms = every non-H, non-O atom plus every O that owns no H (dynamic, re-evaluated per frame);
+#   - z_ref = mean z of the solid atoms within 0.7 A of the highest solid atom.
+# Add `lammps_type_map` per system (or set input.type_map in the run config).
+profile_id: generic_oxide_water
+description: Generic oxide/carbonate slab with water; dynamic solid; reference = top solid layer.
+
+protons: [H]
+acceptors: [O]
+h_assignment:
+  cutoff_A: 1.25
+  mode: nearest
+
+pbc: [true, true, false]
+normal_axis: z
+
+reference:
+  elements: ["@solid"]     # special token: the (dynamic) solid atoms of the frame
+  mode: top_layer
+  layer_width_A: 0.70
+
+solid:
+  mode: dynamic            # non-proton, non-acceptor atoms + acceptors with zero protons
+
+species:
+  acceptor: {0: O2-, 1: OH-, 2: H2O, 3: H3O+, 4: O_other}
+
+windows:
+  - [below_L1, -.inf, 1.5]
+  - [L1, 1.5, 2.8]
+  - [L2, 2.8, 4.0]
+  - [bulk, 4.0, .inf]

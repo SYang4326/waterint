@@ -1,0 +1,23 @@
+# Standard species/layer relabel (mgo_water profile).
+# Several segments may be listed; repeated timesteps (restart overlaps) are skipped.
+input:
+  format: lammpstrj
+  trajectories:
+    - path/to/segment_03.lammpstrj
+    - path/to/segment_04.lammpstrj
+
+relabel:
+  definition: standard
+  h_type: 1
+  mg_type: 2
+  o_type: 3
+  oh_cutoff: 1.50
+  top_layer_width: 0.70
+  tie_tolerance: 1.0e-8
+  expected_mg_count: 288
+  expected_lattice_o_count: 288
+  # lattice_ids: path/to/lattice_O_ids.txt   # optional frozen manifest
+
+output:
+  directory: output/relabel
+  prefix: relabelled

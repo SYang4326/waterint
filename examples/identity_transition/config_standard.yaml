@@ -1,0 +1,16 @@
+input:
+  format: lammpstrj
+  trajectory: output/relabel/relabelled.lammpstrj
+  reader: python
+
+identity_transition:
+  # Both consecutive contiguous states must last at least this many frames.
+  minimum_residence_frames: 1
+  # 'standard' = codes written by `waterint relabel` (see relabelled_type_map.tsv):
+  # O_bone = all lattice O; mobile O2-/OH/H2O/H3O+/O_other pooled over layers.
+  type_codes: standard
+
+output:
+  directory: output/identity_transition
+  prefix: oxygen_identity_transition
+  title: Oxygen identity transitions

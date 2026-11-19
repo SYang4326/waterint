@@ -1,0 +1,12 @@
+profile: mgo_water
+input:
+  format: gpumd-qnpz
+  segments: [run/seg_00, run/seg_01]        # the same frames as the event tables
+  carrier_tracks: carrier/carrier.npz
+  prefetch: 3
+carrier_msd:
+  full_lag_ps: 200                          # every saved frame up to this lag
+  max_lag_ps: 10000                         # sparse beyond 200 ps
+  origin_classes: {interface: [below_L1, L1, L2], bulk: [bulk]}
+  storage: carrier/paths                    # memory-mapped site paths (long runs)
+output: {directory: carrier, prefix: carrier_msd, plot: true}
